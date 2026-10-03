@@ -24,7 +24,7 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 # ==========================================
 # 1. FUNZIONI SCRAPING: SALUTE GOV (Alimentari)
 # ==========================================
-@st.cache_data(ttl=900)  # Cache dei dati per 15 minuti per migliorare le prestazioni
+@st.cache_data(ttl=900)
 def fetch_data_alimentari():
     url = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
 
@@ -32,23 +32,43 @@ def fetch_data_alimentari():
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
+            "Chrome/124.0.0.0 Safari/537.36"
         ),
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.salute.gov.it/",
-        "Accept-Language": "it-IT,it;q=0.9"
+        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.salute.gov.it/portale/news/p3_2_1.jsp",
+        "Cache-Control": "no-cache"
     }
 
     session = requests.Session()
     session.headers.update(headers)
 
     try:
+        # 1. Visita la home per ottenere cookie/sessione
         session.get("https://www.salute.gov.it/", timeout=10)
+
+        # 2. Richiedi i dati JSON
         response = session.get(url, timeout=10)
+        
+        # Controlla gli errori HTTP (es. 403, 404, 500)
         response.raise_for_status()
+
+        # Controlla se la risposta è effettivamente un JSON
+        content_type = response.headers.get("Content-Type", "")
+        if "application/json" not in content_type and not response.text.strip().startswith("{"):
+            st.warning("Il Ministero della Salute ha restituito una risposta non JSON (possibile blocco anti-bot o cambio struttura).")
+            return []
+
         json_data = response.json()
+
+    except requests.exceptions.HTTPError as e:
+        st.error(f"Errore HTTP nella richiesta al Ministero: {e}")
+        return []
     except requests.exceptions.RequestException as e:
-        st.error(f"Errore nella richiesta al Ministero della Salute: {e}")
+        st.error(f"Errore di connessione al Ministero della Salute: {e}")
+        return []
+    except Exception as e:
+        st.error(f"Impossibile decodificare i dati JSON: {e}")
         return []
 
     risultati = []
