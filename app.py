@@ -26,7 +26,11 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 # ==========================================
 @st.cache_data(ttl=900)
 def fetch_data_alimentari():
-    url = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
+    """
+    Effettua lo scraping direttamente dalla pagina HTML degli avvisi alimentari
+    del Ministero della Salute, aggirando i blocchi sulle API JSON.
+    """
+    url_pagina = "https://www.salute.gov.it/portale/news/p3_2_1.jsp?lingua=italiano&menu=notizie&p=richiamialimentari"
 
     headers = {
         "User-Agent": (
@@ -34,44 +38,105 @@ def fetch_data_alimentari():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/json, text/plain, */*",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.salute.gov.it/portale/news/p3_2_1.jsp",
-        "Cache-Control": "no-cache"
+        "Cache-Control": "max-age=0",
+        "Upgrade-Insecure-Requests": "1"
     }
 
     session = requests.Session()
     session.headers.update(headers)
 
     try:
-        # 1. Visita la home per ottenere cookie/sessione
-        session.get("https://www.salute.gov.it/", timeout=10)
-
-        # 2. Richiedi i dati JSON
-        response = session.get(url, timeout=10)
+        # Visita la home per registrare i cookie di sessione
+        session.get("https://www.salute.gov.it/portale/home.html", timeout=10)
         
-        # Controlla gli errori HTTP (es. 403, 404, 500)
+        response = session.get(url_pagina, timeout=12)
         response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        risultati = []
+        
+        # Cerca gli elementi dell'elenco avvisi nella pagina HTML
+        # (Supporta le diverse strutture di layout usate dal portale)
+        articoli = soup.select("ul.elencoNotizie li, div.richiamo-item, table.table-richiami tr")
+        
+        if not articoli:
+            # Selezione generica per blocchi contenenti link a dettagli richiami
+            articoli = soup.find_all("article") or soup.find_all("div", class_=re.compile(r"notizia|richiamo|item"))
 
-        # Controlla se la risposta è effettivamente un JSON
-        content_type = response.headers.get("Content-Type", "")
-        if "application/json" not in content_type and not response.text.strip().startswith("{"):
-            st.warning("Il Ministero della Salute ha restituito una risposta non JSON (possibile blocco anti-bot o cambio struttura).")
-            return []
+        for art in articoli:
+            # Estrazione del link
+            link_tag = art.find("a", href=True)
+            if not link_tag:
+                continue
+                
+            href = link_tag["href"]
+            if href.startswith("/"):
+                link = "https://www.salute.gov.it" + href
+            elif href.startswith("http"):
+                link = href
+            else:
+                link = "https://www.salute.gov.it/portale/news/" + href
 
-        json_data = response.json()
+            # Estrazione del titolo/prodotto
+            titolo = link_tag.get_text(strip=True)
+            if not titolo or len(titolo) < 3:
+                continue
+
+            # Estrazione della data (formato gg/mm/aaaa)
+            testo_completo = art.get_text(separator=" ", strip=True)
+            data_match = re.search(r'\b(\d{2}/\d{2}/\d{4})\b', testo_completo)
+            
+            data_raw = data_match.group(1) if data_match else datetime.now().strftime('%d/%m/%Y')
+            
+            try:
+                dt = datetime.strptime(data_raw, '%d/%m/%Y')
+            except ValueError:
+                dt = datetime.now()
+
+            # Estrazione eventuale di Marca e Motivo se presenti nel testo
+            marca = ""
+            motivo = ""
+            
+            # Tentativo di recupero metadati da eventuali tag specifici
+            span_marca = art.select_one(".marca, .field-marca")
+            if span_marca:
+                marca = span_marca.get_text(strip=True)
+                
+            span_motivo = art.select_one(".motivo, .field-motivo")
+            if span_motivo:
+                motivo = span_motivo.get_text(strip=True)
+
+            # Filtra solo per l'anno corrente
+            if dt.year == CURRENT_YEAR:
+                risultati.append({
+                    'Data': data_raw,
+                    'dt_obj': dt,
+                    'Marca': marca,
+                    'Titolo': titolo,
+                    'Motivo': motivo,
+                    'Link': link
+                })
+
+        # Rimuovi duplicati basandoti sull'URL
+        visti = set()
+        unici = []
+        for item in risultati:
+            if item['Link'] not in visti:
+                visti.add(item['Link'])
+                unici.append(item)
+
+        unici.sort(key=lambda x: x['dt_obj'], reverse=True)
+        return unici
 
     except requests.exceptions.HTTPError as e:
-        st.error(f"Errore HTTP nella richiesta al Ministero: {e}")
-        return []
-    except requests.exceptions.RequestException as e:
-        st.error(f"Errore di connessione al Ministero della Salute: {e}")
+        st.error(f"Il Ministero della Salute richiede una verifica anti-bot (HTTP {e.response.status_code if e.response else 'Error'}).")
         return []
     except Exception as e:
-        st.error(f"Impossibile decodificare i dati JSON: {e}")
+        st.error(f"Impossibile recuperare gli avvisi dal portale HTML: {e}")
         return []
-
-    risultati = []
 
     def esplora(node):
         if isinstance(node, dict):
