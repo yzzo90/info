@@ -6,6 +6,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
+import xml.etree.ElementTree as ET
 
 # --- Configurazione Pagina Streamlit ---
 st.set_page_config(
@@ -27,10 +28,10 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 @st.cache_data(ttl=900)
 def fetch_data_alimentari():
     """
-    Effettua lo scraping direttamente dalla pagina HTML degli avvisi alimentari
-    del Ministero della Salute, aggirando i blocchi sulle API JSON.
+    Recupera i richiami alimentari tramite il feed RSS/XML del Ministero della Salute,
+    molto meno soggetto a blocchi anti-bot rispetto all'API JSON e alle pagine HTML.
     """
-    url_pagina = "https://www.salute.gov.it/portale/news/p3_2_1.jsp?lingua=italiano&menu=notizie&p=richiamialimentari"
+    url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
 
     headers = {
         "User-Agent": (
@@ -38,104 +39,66 @@ def fetch_data_alimentari():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Cache-Control": "max-age=0",
-        "Upgrade-Insecure-Requests": "1"
+        "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
     }
 
-    session = requests.Session()
-    session.headers.update(headers)
-
     try:
-        # Visita la home per registrare i cookie di sessione
-        session.get("https://www.salute.gov.it/portale/home.html", timeout=10)
-        
-        response = session.get(url_pagina, timeout=12)
+        response = requests.get(url_rss, headers=headers, timeout=12)
         response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Parse del contenuto XML
+        root = ET.fromstring(response.content)
         
         risultati = []
         
-        # Cerca gli elementi dell'elenco avvisi nella pagina HTML
-        # (Supporta le diverse strutture di layout usate dal portale)
-        articoli = soup.select("ul.elencoNotizie li, div.richiamo-item, table.table-richiami tr")
-        
-        if not articoli:
-            # Selezione generica per blocchi contenenti link a dettagli richiami
-            articoli = soup.find_all("article") or soup.find_all("div", class_=re.compile(r"notizia|richiamo|item"))
+        # Gli elementi del feed RSS risiedono sotto channel/item
+        for item in root.findall(".//item"):
+            titolo = item.findtext("title", default="").strip()
+            link = item.findtext("link", default="").strip()
+            pub_date_raw = item.findtext("pubDate", default="").strip()
+            description = item.findtext("description", default="").strip()
 
-        for art in articoli:
-            # Estrazione del link
-            link_tag = art.find("a", href=True)
-            if not link_tag:
-                continue
-                
-            href = link_tag["href"]
-            if href.startswith("/"):
-                link = "https://www.salute.gov.it" + href
-            elif href.startswith("http"):
-                link = href
-            else:
-                link = "https://www.salute.gov.it/portale/news/" + href
-
-            # Estrazione del titolo/prodotto
-            titolo = link_tag.get_text(strip=True)
-            if not titolo or len(titolo) < 3:
+            if not titolo or not link:
                 continue
 
-            # Estrazione della data (formato gg/mm/aaaa)
-            testo_completo = art.get_text(separator=" ", strip=True)
-            data_match = re.search(r'\b(\d{2}/\d{2}/\d{4})\b', testo_completo)
+            # Parsing della data RSS (es. "Wed, 04 Oct 2026 10:00:00 GMT" o formato standard)
+            dt_obj = datetime.now()
+            data_str = TODAY.strftime("%d/%m/%Y")
             
-            data_raw = data_match.group(1) if data_match else datetime.now().strftime('%d/%m/%Y')
-            
-            try:
-                dt = datetime.strptime(data_raw, '%d/%m/%Y')
-            except ValueError:
-                dt = datetime.now()
+            if pub_date_raw:
+                try:
+                    # Tenta il formato standard RFC 822 (RSS)
+                    from email.utils import parsedate_to_datetime
+                    dt_obj = parsedate_to_datetime(pub_date_raw)
+                    data_str = dt_obj.strftime("%d/%m/%Y")
+                except Exception:
+                    pass
 
-            # Estrazione eventuale di Marca e Motivo se presenti nel testo
+            # Tenta di estrarre Marca e Motivo dalla descrizione o dal titolo
             marca = ""
-            motivo = ""
-            
-            # Tentativo di recupero metadati da eventuali tag specifici
-            span_marca = art.select_one(".marca, .field-marca")
-            if span_marca:
-                marca = span_marca.get_text(strip=True)
-                
-            span_motivo = art.select_one(".motivo, .field-motivo")
-            if span_motivo:
-                motivo = span_motivo.get_text(strip=True)
+            motivo = description
 
-            # Filtra solo per l'anno corrente
-            if dt.year == CURRENT_YEAR:
-                risultati.append({
-                    'Data': data_raw,
-                    'dt_obj': dt,
-                    'Marca': marca,
-                    'Titolo': titolo,
-                    'Motivo': motivo,
-                    'Link': link
-                })
+            if " - " in titolo:
+                parti = titolo.split(" - ")
+                marca = parti[0]
+                titolo = " - ".join(parti[1:])
 
-        # Rimuovi duplicati basandoti sull'URL
-        visti = set()
-        unici = []
-        for item in risultati:
-            if item['Link'] not in visti:
-                visti.add(item['Link'])
-                unici.append(item)
+            risultati.append({
+                'Data': data_str,
+                'dt_obj': dt_obj,
+                'Marca': marca,
+                'Titolo': titolo,
+                'Motivo': motivo,
+                'Link': link
+            })
 
-        unici.sort(key=lambda x: x['dt_obj'], reverse=True)
-        return unici
+        # Ordina per data decrescente
+        risultati.sort(key=lambda x: x['dt_obj'], reverse=True)
+        return risultati
 
-    except requests.exceptions.HTTPError as e:
-        st.error(f"Il Ministero della Salute richiede una verifica anti-bot (HTTP {e.response.status_code if e.response else 'Error'}).")
-        return []
     except Exception as e:
-        st.error(f"Impossibile recuperare gli avvisi dal portale HTML: {e}")
+        # Fallback in caso di blocco totale: restituisce un messaggio chiaro nella UI
+        st.warning(f"Impossibile collegarsi al feed del Ministero: {e}")
         return []
 
     def esplora(node):
