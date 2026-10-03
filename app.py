@@ -1,4 +1,5 @@
 import re
+import time
 import logging
 import requests
 from datetime import datetime
@@ -31,14 +32,48 @@ URL_JSON = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-
 URL_RSS = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
 
 
-def _get(url, log, nome):
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=60)
-        log.append(f"{nome}: HTTP {r.status_code}, {len(r.content)} byte")
-        if r.status_code == 200 and r.content.strip():
-            return r
-    except Exception as e:
-        log.append(f"{nome}: ERRORE {type(e).__name__}: {e}")
+HEADER_PROFILES = [
+    # Profilo che ha funzionato nel test manuale
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+        "Accept": "application/json,text/html,*/*",
+        "Accept-Language": "it-IT,it;q=0.9",
+    },
+    HEADERS,
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Accept": "*/*",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.5",
+        "Referer": "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
+    },
+]
+
+
+def _valido(r, kind):
+    testo = r.content.lstrip()[:20]
+    if kind == "json":
+        return testo.startswith(b"{")
+    return testo.startswith(b"<?xml") or testo.startswith(b"<rss")
+
+
+def _get(url, log, nome, kind):
+    """Prova più profili di header con una sessione; scarta le pagine di blocco."""
+    for i, headers in enumerate(HEADER_PROFILES, 1):
+        try:
+            s = requests.Session()
+            try:  # visita la home per ottenere eventuali cookie del WAF
+                s.get("https://www.salute.gov.it/new/it/", headers=headers, timeout=15)
+            except Exception:
+                pass
+            r = s.get(url, headers=headers, timeout=60)
+            log.append(f"{nome} profilo {i}: HTTP {r.status_code}, {len(r.content)} byte")
+            if r.status_code == 200 and _valido(r, kind):
+                return r
+            anteprima = r.text[:150].replace("\n", " ")
+            log.append(f"  risposta non valida, inizio: {anteprima}")
+        except Exception as e:
+            log.append(f"{nome} profilo {i}: ERRORE {type(e).__name__}: {e}")
+        time.sleep(2)
     return None
 
 
@@ -106,7 +141,7 @@ def _fetch_alimentari_cached():
     # Se fallisce solleva un'eccezione: Streamlit NON mette in cache gli errori
     log = []
 
-    r = _get(URL_JSON, log, "JSON")
+    r = _get(URL_JSON, log, "JSON", "json")
     if r is not None:
         try:
             dati = _parse_json(r.json())
@@ -116,7 +151,7 @@ def _fetch_alimentari_cached():
         except Exception as e:
             log.append(f"JSON parsing ERRORE: {e}")
 
-    r = _get(URL_RSS, log, "RSS")
+    r = _get(URL_RSS, log, "RSS", "xml")
     if r is not None:
         try:
             dati = _parse_rss(r.content)
