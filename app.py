@@ -6,7 +6,6 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
-import xml.etree.ElementTree as ET
 
 # --- Configurazione Pagina Streamlit ---
 st.set_page_config(
@@ -23,15 +22,14 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 
 
 # ==========================================
-# 1. FUNZIONI SCRAPING: SALUTE GOV (Alimentari)
+# 1. FUNZIONI SCRAPING: SALUTE GOV (Soluzione 2: Proxy AllOrigins)
 # ==========================================
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=900)  # Cache dei dati per 15 minuti
 def fetch_data_alimentari():
-    """
-    Recupera i richiami alimentari tramite il feed RSS/XML del Ministero della Salute,
-    molto meno soggetto a blocchi anti-bot rispetto all'API JSON e alle pagine HTML.
-    """
-    url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
+    url_target = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
+    
+    # Inoltra la richiesta tramite il proxy AllOrigins per evitare blocchi IP/WAF
+    url_proxy = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_target)}"
 
     headers = {
         "User-Agent": (
@@ -39,67 +37,21 @@ def fetch_data_alimentari():
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8"
+        "Accept": "application/json, text/plain, */*"
     }
 
     try:
-        response = requests.get(url_rss, headers=headers, timeout=12)
+        response = requests.get(url_proxy, headers=headers, timeout=15)
         response.raise_for_status()
-
-        # Parse del contenuto XML
-        root = ET.fromstring(response.content)
-        
-        risultati = []
-        
-        # Gli elementi del feed RSS risiedono sotto channel/item
-        for item in root.findall(".//item"):
-            titolo = item.findtext("title", default="").strip()
-            link = item.findtext("link", default="").strip()
-            pub_date_raw = item.findtext("pubDate", default="").strip()
-            description = item.findtext("description", default="").strip()
-
-            if not titolo or not link:
-                continue
-
-            # Parsing della data RSS (es. "Wed, 04 Oct 2026 10:00:00 GMT" o formato standard)
-            dt_obj = datetime.now()
-            data_str = TODAY.strftime("%d/%m/%Y")
-            
-            if pub_date_raw:
-                try:
-                    # Tenta il formato standard RFC 822 (RSS)
-                    from email.utils import parsedate_to_datetime
-                    dt_obj = parsedate_to_datetime(pub_date_raw)
-                    data_str = dt_obj.strftime("%d/%m/%Y")
-                except Exception:
-                    pass
-
-            # Tenta di estrarre Marca e Motivo dalla descrizione o dal titolo
-            marca = ""
-            motivo = description
-
-            if " - " in titolo:
-                parti = titolo.split(" - ")
-                marca = parti[0]
-                titolo = " - ".join(parti[1:])
-
-            risultati.append({
-                'Data': data_str,
-                'dt_obj': dt_obj,
-                'Marca': marca,
-                'Titolo': titolo,
-                'Motivo': motivo,
-                'Link': link
-            })
-
-        # Ordina per data decrescente
-        risultati.sort(key=lambda x: x['dt_obj'], reverse=True)
-        return risultati
-
-    except Exception as e:
-        # Fallback in caso di blocco totale: restituisce un messaggio chiaro nella UI
-        st.warning(f"Impossibile collegarsi al feed del Ministero: {e}")
+        json_data = response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Errore nella richiesta tramite Proxy al Ministero: {e}")
         return []
+    except Exception as e:
+        st.error(f"Impossibile decodificare i dati JSON dal Proxy: {e}")
+        return []
+
+    risultati = []
 
     def esplora(node):
         if isinstance(node, dict):
@@ -180,8 +132,12 @@ def estrai_avvisi_ferrovia():
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
 
-                # Evidenziazione keyword sciopero per rendering markdown/HTML
-                titolo_formatted = re.sub(r'(sciopero)', r'<span style="color:red; font-weight:bold;">\1</span>', titolo_raw, flags=re.IGNORECASE)
+                titolo_formatted = re.sub(
+                    r'(sciopero)', 
+                    r'<span style="color:red; font-weight:bold;">\1</span>', 
+                    titolo_raw, 
+                    flags=re.IGNORECASE
+                )
 
                 avvisi.append({"titolo": titolo_formatted, "link": link})
 
@@ -217,9 +173,9 @@ def estrai_news_ferrovia():
 # ==========================================
 # 3. INTERFACCIA UTENTE (STREAMLIT)
 # ==========================================
-st.title("📌 Centro Info")
+st.title("📌 Centro Info: Ferrotramviaria & Sicurezza Alimentare")
 
-# Definizione dei due tab centrali (Ferrotramviaria è il primo, quindi si apre di default)
+# Definizione dei due tab centrali (Ferrotramviaria apre di default)
 tab_ferrovia, tab_alimentare = st.tabs(["🚆 Ferrotramviaria (News & Avvisi)", "🥗 Avvisi Alimentari"])
 
 # --- TAB 1: FERROTRAMVIARIA (DEFAULT) ---
@@ -253,7 +209,6 @@ with tab_alimentare:
     if dati_alim:
         df = pd.DataFrame(dati_alim)
 
-        # Campo di ricerca per filtrare la tabella
         search_query = st.text_input("🔍 Cerca nei richiami alimentari (marca, prodotto, motivo...):", "")
 
         if search_query:
@@ -263,10 +218,8 @@ with tab_alimentare:
                 df['Motivo'].str.contains(search_query, case=False, na=False)
             ]
 
-        # Seleziona e ordina le colonne da visualizzare
         df_display = df[['Data', 'Marca', 'Titolo', 'Motivo', 'Link']]
 
-        # Rendering della tabella interattiva con link cliccabili
         st.dataframe(
             df_display,
             column_config={
@@ -276,4 +229,4 @@ with tab_alimentare:
             hide_index=True
         )
     else:
-        st.warning("Nessun dato alimentari disponibile.")
+        st.warning("Nessun dato alimentari disponibile al momento.")
