@@ -1,195 +1,152 @@
-import os
 import re
 import logging
 import requests
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
 import xml.etree.ElementTree as ET
 
-
 # --- Configurazione Pagina Streamlit ---
-st.set_page_config(
-    page_title="Dashboard Avvisi & News",
-    page_icon="📢",
-    layout="wide"
-)
+st.set_page_config(page_title="Dashboard Avvisi & News", page_icon="📢", layout="wide")
 
 CURRENT_YEAR = datetime.now().year
-TODAY = datetime.now().date()
+logging.getLogger("urllib3").setLevel(logging.ERROR)
 
-# Disattiva log ridondanti
-logging.getLogger('urllib3').setLevel(logging.ERROR)
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json,application/xml,text/html,*/*",
+    "Accept-Language": "it-IT,it;q=0.9",
+}
 
 
 # ==========================================
-# 1. FUNZIONI SCRAPING: SALUTE GOV (Soluzione 2: Proxy AllOrigins)
+# 1. AVVISI ALIMENTARI (Ministero della Salute)
 # ==========================================
-@st.cache_data(ttl=900)
-def fetch_data_alimentari():
-    """
-    Recupera i dati con un sistema di proxy trasparente su tutte le sorgenti (JSON e RSS)
-    per evitare che i blocchi IP/WAF del Ministero facciano fallire il parsing.
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        )
-    }
+URL_JSON = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
+URL_RSS = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
 
-    url_json = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
-    url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
 
-    json_data = None
-
-    # --- TENTATIVO 1: JSON tramite AllOrigins ---
+def _get(url, log, nome):
     try:
-        url_proxy1 = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_json)}"
-        res = requests.get(url_proxy1, headers=headers, timeout=8)
-        if res.status_code == 200 and res.text.strip().startswith("{"):
-            json_data = res.json()
-    except Exception:
-        pass
+        r = requests.get(url, headers=HEADERS, timeout=60)
+        log.append(f"{nome}: HTTP {r.status_code}, {len(r.content)} byte")
+        if r.status_code == 200 and r.content.strip():
+            return r
+    except Exception as e:
+        log.append(f"{nome}: ERRORE {type(e).__name__}: {e}")
+    return None
 
-    # --- TENTATIVO 2: JSON tramite CorsProxy ---
-    if not json_data:
+
+def _parse_json(json_data):
+    risultati = []
+
+    def esplora(node):
+        if isinstance(node, dict):
+            path = node.get("path")
+            alias = path.get("alias") if isinstance(path, dict) else None
+            g, m, a = node.get("field_giorno"), node.get("field_mese"), node.get("field_anno")
+
+            if alias and node.get("title") and g and m and a:
+                try:
+                    dt = datetime(int(a), int(m), int(g))
+                except (ValueError, TypeError):
+                    dt = None
+
+                if dt and dt.year == CURRENT_YEAR:
+                    risultati.append({
+                        "Data": dt.strftime("%d/%m/%Y"),
+                        "dt_obj": dt,
+                        "Marca": node.get("field_marca") or "",
+                        "Titolo": node.get("field_prodotto") or node["title"],
+                        "Motivo": node.get("field_sostanza") or "",
+                        "Link": "https://www.salute.gov.it/new/it" + alias,
+                    })
+
+            for v in node.values():
+                esplora(v)
+        elif isinstance(node, list):
+            for i in node:
+                esplora(i)
+
+    esplora(json_data)
+    unici = {r["Link"]: r for r in risultati}.values()
+    return sorted(unici, key=lambda x: x["dt_obj"], reverse=True)
+
+
+def _parse_rss(content):
+    root = ET.fromstring(content.strip())
+    out = []
+    for item in root.findall(".//item"):
+        titolo = item.findtext("title", default="").strip()
+        link = item.findtext("link", default="").strip()
+        if not titolo or not link:
+            continue
         try:
-            url_proxy2 = f"https://corsproxy.io/?{requests.utils.quote(url_json)}"
-            res = requests.get(url_proxy2, headers=headers, timeout=8)
-            if res.status_code == 200 and res.text.strip().startswith("{"):
-                json_data = res.json()
+            dt = parsedate_to_datetime(item.findtext("pubDate", default="")).replace(tzinfo=None)
         except Exception:
-            pass
+            dt = datetime.now()
+        marca = ""
+        if " - " in titolo:
+            marca, titolo = titolo.split(" - ", 1)
+        out.append({
+            "Data": dt.strftime("%d/%m/%Y"), "dt_obj": dt, "Marca": marca,
+            "Titolo": titolo, "Motivo": item.findtext("description", default="").strip(),
+            "Link": link,
+        })
+    return sorted(out, key=lambda x: x["dt_obj"], reverse=True)
 
-    # --- PARSING JSON (se uno dei proxy JSON ha funzionato) ---
-    if json_data:
-        risultati = []
 
-        def esplora(node):
-            if isinstance(node, dict):
-                data_raw = node.get('dataPubblicazione') or node.get('field_data_pubblicazione')
-                marca = node.get('field_marca')
-                title = node.get('title')
+@st.cache_data(ttl=3600, show_spinner="Scarico i richiami dal Ministero...")
+def _fetch_alimentari_cached():
+    # Se fallisce solleva un'eccezione: Streamlit NON mette in cache gli errori
+    log = []
 
-                motivo = None
-                motivo_obj = node.get('relationships', {}).get('field_motivo_segnalazione')
-                if isinstance(motivo_obj, dict):
-                    motivo = motivo_obj.get('name')
+    r = _get(URL_JSON, log, "JSON")
+    if r is not None:
+        try:
+            dati = _parse_json(r.json())
+            log.append(f"JSON parsato: {len(dati)} record (anno {CURRENT_YEAR})")
+            if dati:
+                return dati, log
+        except Exception as e:
+            log.append(f"JSON parsing ERRORE: {e}")
 
-                link = None
-                path = node.get('path')
-                if isinstance(path, dict):
-                    alias = path.get('alias')
-                    if alias:
-                        link = "https://www.salute.gov.it/new/it" + alias
+    r = _get(URL_RSS, log, "RSS")
+    if r is not None:
+        try:
+            dati = _parse_rss(r.content)
+            log.append(f"RSS parsato: {len(dati)} record")
+            if dati:
+                return dati, log
+        except Exception as e:
+            log.append(f"RSS parsing ERRORE: {e}")
 
-                if data_raw and title and link:
-                    try:
-                        dt = datetime.strptime(data_raw, '%d/%m/%Y')
-                        if dt.year == CURRENT_YEAR:
-                            risultati.append({
-                                'Data': data_raw,
-                                'dt_obj': dt,
-                                'Marca': marca or '',
-                                'Titolo': title,
-                                'Motivo': motivo or '',
-                                'Link': link
-                            })
-                    except ValueError:
-                        pass
+    raise RuntimeError("\n".join(log))
 
-                for value in node.values():
-                    esplora(value)
 
-            elif isinstance(node, list):
-                for item in node:
-                    esplora(item)
-
-        esplora(json_data)
-
-        # Rimuovi duplicati
-        visti = set()
-        unici = []
-        for item in risultati:
-            if item['Link'] not in visti:
-                visti.add(item['Link'])
-                unici.append(item)
-
-        unici.sort(key=lambda x: x['dt_obj'], reverse=True)
-        if unici:
-            return unici
-
-    # --- TENTATIVO 3: Feed RSS tramite Proxy (AllOrigins) ---
+def fetch_data_alimentari():
     try:
-        url_rss_proxy = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_rss)}"
-        res_rss = requests.get(url_rss_proxy, headers=headers, timeout=10)
-        
-        # Verifica se la risposta inizia con un tag XML valido prima di parsare
-        content = res_rss.content.strip()
-        if content.startswith(b"<?xml") or content.startswith(b"<rss"):
-            root = ET.fromstring(content)
-            risultati_rss = []
-
-            for item in root.findall(".//item"):
-                titolo = item.findtext("title", default="").strip()
-                link = item.findtext("link", default="").strip()
-                pub_date_raw = item.findtext("pubDate", default="").strip()
-                description = item.findtext("description", default="").strip()
-
-                if not titolo or not link:
-                    continue
-
-                dt_obj = datetime.now()
-                data_str = TODAY.strftime("%d/%m/%Y")
-
-                if pub_date_raw:
-                    try:
-                        from email.utils import parsedate_to_datetime
-                        dt_obj = parsedate_to_datetime(pub_date_raw)
-                        data_str = dt_obj.strftime("%d/%m/%Y")
-                    except Exception:
-                        pass
-
-                marca = ""
-                motivo = description
-                if " - " in titolo:
-                    parti = titolo.split(" - ")
-                    marca = parti[0]
-                    titolo = " - ".join(parti[1:])
-
-                risultati_rss.append({
-                    'Data': data_str,
-                    'dt_obj': dt_obj,
-                    'Marca': marca,
-                    'Titolo': titolo,
-                    'Motivo': motivo,
-                    'Link': link
-                })
-
-            risultati_rss.sort(key=lambda x: x['dt_obj'], reverse=True)
-            if risultati_rss:
-                return risultati_rss
-
-    except Exception:
-        pass
-
-    # Se tutti i tentativi falliscono, mostra il messaggio di cortesia senza far crashare l'app
-    return []
+        return _fetch_alimentari_cached()
+    except RuntimeError as e:
+        return [], str(e).split("\n")
 
 
 # ==========================================
-# 2. FUNZIONI SCRAPING: FERROTRAMVIARIA
+# 2. FERROTRAMVIARIA
 # ==========================================
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
+
 @st.cache_data(ttl=900)
 def estrai_avvisi_ferrovia():
     try:
-        response = requests.get(URL_AVVISI, timeout=10)
+        response = requests.get(URL_AVVISI, headers=HEADERS, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -197,32 +154,28 @@ def estrai_avvisi_ferrovia():
         for div in soup.select("div.notice"):
             link_tag = div.find("a", href=True)
             title_tag = div.find("p", class_="title")
-
             if link_tag and title_tag:
                 link = link_tag["href"]
                 titolo_raw = title_tag.get_text(strip=True)
-
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
-
-                titolo_formatted = re.sub(
-                    r'(sciopero)', 
-                    r'<span style="color:red; font-weight:bold;">\1</span>', 
-                    titolo_raw, 
-                    flags=re.IGNORECASE
+                titolo = re.sub(
+                    r"(sciopero)",
+                    r'<span style="color:red; font-weight:bold;">\1</span>',
+                    titolo_raw,
+                    flags=re.IGNORECASE,
                 )
-
-                avvisi.append({"titolo": titolo_formatted, "link": link})
-
+                avvisi.append({"titolo": titolo, "link": link})
         return avvisi
     except Exception as e:
         st.error(f"Errore nel recupero avvisi Ferrotramviaria: {e}")
         return []
 
+
 @st.cache_data(ttl=900)
 def estrai_news_ferrovia():
     try:
-        response = requests.get(URL_NEWS, timeout=10)
+        response = requests.get(URL_NEWS, headers=HEADERS, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -232,10 +185,8 @@ def estrai_news_ferrovia():
             title = title_tag.get_text(strip=True) if title_tag else "–"
             link_tag = article.find("a", class_="nav-link", href=True)
             link = link_tag["href"] if link_tag else "#"
-
             if link.startswith("/"):
-                link = "https://ferrotramviaria.it" + link
-
+                link = "https://www.ferrotramviaria.it" + link
             news.append({"titolo": title, "link": link})
         return news
     except Exception as e:
@@ -244,14 +195,14 @@ def estrai_news_ferrovia():
 
 
 # ==========================================
-# 3. INTERFACCIA UTENTE (STREAMLIT)
+# 3. INTERFACCIA
 # ==========================================
 st.title("📌 Centro Info: Ferrotramviaria & Sicurezza Alimentare")
 
-# Definizione dei due tab centrali (Ferrotramviaria apre di default)
-tab_ferrovia, tab_alimentare = st.tabs(["🚆 Ferrotramviaria (News & Avvisi)", "🥗 Avvisi Alimentari"])
+tab_ferrovia, tab_alimentare = st.tabs(
+    ["🚆 Ferrotramviaria (News & Avvisi)", "🥗 Avvisi Alimentari"]
+)
 
-# --- TAB 1: FERROTRAMVIARIA (DEFAULT) ---
 with tab_ferrovia:
     col1, col2 = st.columns(2)
 
@@ -273,33 +224,35 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news trovata.")
 
-# --- TAB 2: AVVISI ALIMENTARI ---
 with tab_alimentare:
-    dati_alim = fetch_data_alimentari()
+    dati_alim, log_alim = fetch_data_alimentari()
 
-    st.subheader(f"Avvisi Sicurezza Alimentare - {len(dati_alim)} risultati (Anno {CURRENT_YEAR})")
+    with st.expander("🛠️ Log recupero dati"):
+        st.code("\n".join(log_alim))
+        if st.button("Svuota cache e riprova"):
+            st.cache_data.clear()
+            st.rerun()
 
     if dati_alim:
         df = pd.DataFrame(dati_alim)
 
-        search_query = st.text_input("🔍 Cerca nei richiami alimentari (marca, prodotto, motivo...):", "")
-
+        search_query = st.text_input(
+            "🔍 Cerca nei richiami alimentari (marca, prodotto, motivo...):", ""
+        )
         if search_query:
             df = df[
-                df['Marca'].str.contains(search_query, case=False, na=False) |
-                df['Titolo'].str.contains(search_query, case=False, na=False) |
-                df['Motivo'].str.contains(search_query, case=False, na=False)
+                df["Marca"].str.contains(search_query, case=False, na=False, regex=False)
+                | df["Titolo"].str.contains(search_query, case=False, na=False, regex=False)
+                | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
             ]
 
-        df_display = df[['Data', 'Marca', 'Titolo', 'Motivo', 'Link']]
+        st.subheader(f"Avvisi Sicurezza Alimentare - {len(df)} risultati (Anno {CURRENT_YEAR})")
 
         st.dataframe(
-            df_display,
-            column_config={
-                "Link": st.column_config.LinkColumn("Link Scheda", display_text="Apri")
-            },
+            df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
+            column_config={"Link": st.column_config.LinkColumn("Link Scheda", display_text="Apri")},
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
     else:
-        st.warning("Nessun dato alimentari disponibile al momento.")
+        st.warning("Nessun dato alimentare disponibile al momento. Controlla il log qui sopra.")
