@@ -29,13 +29,9 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 @st.cache_data(ttl=900)
 def fetch_data_alimentari():
     """
-    Recupera i dati con sistema di fallback a 3 livelli:
-    1. Proxy AllOrigins (JSON)
-    2. Proxy alternativo CorsProxy (JSON)
-    3. Feed RSS del Ministero della Salute (XML) - Massima affidabilità
+    Recupera i dati con un sistema di proxy trasparente su tutte le sorgenti (JSON e RSS)
+    per evitare che i blocchi IP/WAF del Ministero facciano fallire il parsing.
     """
-    url_target = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
-    
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -44,28 +40,31 @@ def fetch_data_alimentari():
         )
     }
 
+    url_json = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
+    url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
+
     json_data = None
 
-    # --- TENTATIVO 1: AllOrigins Proxy ---
+    # --- TENTATIVO 1: JSON tramite AllOrigins ---
     try:
-        url_proxy1 = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_target)}"
+        url_proxy1 = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_json)}"
         res = requests.get(url_proxy1, headers=headers, timeout=8)
-        if res.status_code == 200:
+        if res.status_code == 200 and res.text.strip().startswith("{"):
             json_data = res.json()
     except Exception:
-        pass  # Se AllOrigins va in timeout o fallisce, passa al secondo tentativo
+        pass
 
-    # --- TENTATIVO 2: Proxy Alternativo (CorsProxy) ---
+    # --- TENTATIVO 2: JSON tramite CorsProxy ---
     if not json_data:
         try:
-            url_proxy2 = f"https://corsproxy.io/?{requests.utils.quote(url_target)}"
+            url_proxy2 = f"https://corsproxy.io/?{requests.utils.quote(url_json)}"
             res = requests.get(url_proxy2, headers=headers, timeout=8)
-            if res.status_code == 200:
+            if res.status_code == 200 and res.text.strip().startswith("{"):
                 json_data = res.json()
         except Exception:
             pass
 
-    # --- ESECUZIONE PARSING JSON (Se uno dei proxy ha risposto) ---
+    # --- PARSING JSON (se uno dei proxy JSON ha funzionato) ---
     if json_data:
         risultati = []
 
@@ -123,57 +122,62 @@ def fetch_data_alimentari():
         if unici:
             return unici
 
-    # --- TENTATIVO 3 (FALLBACK DEFINITIVO): Feed RSS Ufficiale (XML) ---
+    # --- TENTATIVO 3: Feed RSS tramite Proxy (AllOrigins) ---
     try:
-        url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
-        res_rss = requests.get(url_rss, headers=headers, timeout=10)
-        res_rss.raise_for_status()
+        url_rss_proxy = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_rss)}"
+        res_rss = requests.get(url_rss_proxy, headers=headers, timeout=10)
+        
+        # Verifica se la risposta inizia con un tag XML valido prima di parsare
+        content = res_rss.content.strip()
+        if content.startswith(b"<?xml") or content.startswith(b"<rss"):
+            root = ET.fromstring(content)
+            risultati_rss = []
 
-        root = ET.fromstring(res_rss.content)
-        risultati_rss = []
+            for item in root.findall(".//item"):
+                titolo = item.findtext("title", default="").strip()
+                link = item.findtext("link", default="").strip()
+                pub_date_raw = item.findtext("pubDate", default="").strip()
+                description = item.findtext("description", default="").strip()
 
-        for item in root.findall(".//item"):
-            titolo = item.findtext("title", default="").strip()
-            link = item.findtext("link", default="").strip()
-            pub_date_raw = item.findtext("pubDate", default="").strip()
-            description = item.findtext("description", default="").strip()
+                if not titolo or not link:
+                    continue
 
-            if not titolo or not link:
-                continue
+                dt_obj = datetime.now()
+                data_str = TODAY.strftime("%d/%m/%Y")
 
-            dt_obj = datetime.now()
-            data_str = TODAY.strftime("%d/%m/%Y")
+                if pub_date_raw:
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        dt_obj = parsedate_to_datetime(pub_date_raw)
+                        data_str = dt_obj.strftime("%d/%m/%Y")
+                    except Exception:
+                        pass
 
-            if pub_date_raw:
-                try:
-                    from email.utils import parsedate_to_datetime
-                    dt_obj = parsedate_to_datetime(pub_date_raw)
-                    data_str = dt_obj.strftime("%d/%m/%Y")
-                except Exception:
-                    pass
+                marca = ""
+                motivo = description
+                if " - " in titolo:
+                    parti = titolo.split(" - ")
+                    marca = parti[0]
+                    titolo = " - ".join(parti[1:])
 
-            marca = ""
-            motivo = description
-            if " - " in titolo:
-                parti = titolo.split(" - ")
-                marca = parti[0]
-                titolo = " - ".join(parti[1:])
+                risultati_rss.append({
+                    'Data': data_str,
+                    'dt_obj': dt_obj,
+                    'Marca': marca,
+                    'Titolo': titolo,
+                    'Motivo': motivo,
+                    'Link': link
+                })
 
-            risultati_rss.append({
-                'Data': data_str,
-                'dt_obj': dt_obj,
-                'Marca': marca,
-                'Titolo': titolo,
-                'Motivo': motivo,
-                'Link': link
-            })
+            risultati_rss.sort(key=lambda x: x['dt_obj'], reverse=True)
+            if risultati_rss:
+                return risultati_rss
 
-        risultati_rss.sort(key=lambda x: x['dt_obj'], reverse=True)
-        return risultati_rss
+    except Exception:
+        pass
 
-    except Exception as e:
-        st.error(f"Impossibile recuperare i dati dei richiami alimentari: {e}")
-        return []
+    # Se tutti i tentativi falliscono, mostra il messaggio di cortesia senza far crashare l'app
+    return []
 
 
 # ==========================================
