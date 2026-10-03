@@ -6,6 +6,8 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
+import xml.etree.ElementTree as ET
+
 
 # --- Configurazione Pagina Streamlit ---
 st.set_page_config(
@@ -24,87 +26,154 @@ logging.getLogger('urllib3').setLevel(logging.ERROR)
 # ==========================================
 # 1. FUNZIONI SCRAPING: SALUTE GOV (Soluzione 2: Proxy AllOrigins)
 # ==========================================
-@st.cache_data(ttl=900)  # Cache dei dati per 15 minuti
+@st.cache_data(ttl=900)
 def fetch_data_alimentari():
+    """
+    Recupera i dati con sistema di fallback a 3 livelli:
+    1. Proxy AllOrigins (JSON)
+    2. Proxy alternativo CorsProxy (JSON)
+    3. Feed RSS del Ministero della Salute (XML) - Massima affidabilità
+    """
     url_target = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
     
-    # Inoltra la richiesta tramite il proxy AllOrigins per evitare blocchi IP/WAF
-    url_proxy = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_target)}"
-
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*"
+        )
     }
 
+    json_data = None
+
+    # --- TENTATIVO 1: AllOrigins Proxy ---
     try:
-        response = requests.get(url_proxy, headers=headers, timeout=15)
-        response.raise_for_status()
-        json_data = response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Errore nella richiesta tramite Proxy al Ministero: {e}")
-        return []
-    except Exception as e:
-        st.error(f"Impossibile decodificare i dati JSON dal Proxy: {e}")
-        return []
+        url_proxy1 = f"https://api.allorigins.win/raw?url={requests.utils.quote(url_target)}"
+        res = requests.get(url_proxy1, headers=headers, timeout=8)
+        if res.status_code == 200:
+            json_data = res.json()
+    except Exception:
+        pass  # Se AllOrigins va in timeout o fallisce, passa al secondo tentativo
 
-    risultati = []
+    # --- TENTATIVO 2: Proxy Alternativo (CorsProxy) ---
+    if not json_data:
+        try:
+            url_proxy2 = f"https://corsproxy.io/?{requests.utils.quote(url_target)}"
+            res = requests.get(url_proxy2, headers=headers, timeout=8)
+            if res.status_code == 200:
+                json_data = res.json()
+        except Exception:
+            pass
 
-    def esplora(node):
-        if isinstance(node, dict):
-            data_raw = node.get('dataPubblicazione') or node.get('field_data_pubblicazione')
-            marca = node.get('field_marca')
-            title = node.get('title')
+    # --- ESECUZIONE PARSING JSON (Se uno dei proxy ha risposto) ---
+    if json_data:
+        risultati = []
 
-            motivo = None
-            motivo_obj = node.get('relationships', {}).get('field_motivo_segnalazione')
-            if isinstance(motivo_obj, dict):
-                motivo = motivo_obj.get('name')
+        def esplora(node):
+            if isinstance(node, dict):
+                data_raw = node.get('dataPubblicazione') or node.get('field_data_pubblicazione')
+                marca = node.get('field_marca')
+                title = node.get('title')
 
-            link = None
-            path = node.get('path')
-            if isinstance(path, dict):
-                alias = path.get('alias')
-                if alias:
-                    link = "https://www.salute.gov.it/new/it" + alias
+                motivo = None
+                motivo_obj = node.get('relationships', {}).get('field_motivo_segnalazione')
+                if isinstance(motivo_obj, dict):
+                    motivo = motivo_obj.get('name')
 
-            if data_raw and title and link:
+                link = None
+                path = node.get('path')
+                if isinstance(path, dict):
+                    alias = path.get('alias')
+                    if alias:
+                        link = "https://www.salute.gov.it/new/it" + alias
+
+                if data_raw and title and link:
+                    try:
+                        dt = datetime.strptime(data_raw, '%d/%m/%Y')
+                        if dt.year == CURRENT_YEAR:
+                            risultati.append({
+                                'Data': data_raw,
+                                'dt_obj': dt,
+                                'Marca': marca or '',
+                                'Titolo': title,
+                                'Motivo': motivo or '',
+                                'Link': link
+                            })
+                    except ValueError:
+                        pass
+
+                for value in node.values():
+                    esplora(value)
+
+            elif isinstance(node, list):
+                for item in node:
+                    esplora(item)
+
+        esplora(json_data)
+
+        # Rimuovi duplicati
+        visti = set()
+        unici = []
+        for item in risultati:
+            if item['Link'] not in visti:
+                visti.add(item['Link'])
+                unici.append(item)
+
+        unici.sort(key=lambda x: x['dt_obj'], reverse=True)
+        if unici:
+            return unici
+
+    # --- TENTATIVO 3 (FALLBACK DEFINITIVO): Feed RSS Ufficiale (XML) ---
+    try:
+        url_rss = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
+        res_rss = requests.get(url_rss, headers=headers, timeout=10)
+        res_rss.raise_for_status()
+
+        root = ET.fromstring(res_rss.content)
+        risultati_rss = []
+
+        for item in root.findall(".//item"):
+            titolo = item.findtext("title", default="").strip()
+            link = item.findtext("link", default="").strip()
+            pub_date_raw = item.findtext("pubDate", default="").strip()
+            description = item.findtext("description", default="").strip()
+
+            if not titolo or not link:
+                continue
+
+            dt_obj = datetime.now()
+            data_str = TODAY.strftime("%d/%m/%Y")
+
+            if pub_date_raw:
                 try:
-                    dt = datetime.strptime(data_raw, '%d/%m/%Y')
-                    if dt.year == CURRENT_YEAR:
-                        risultati.append({
-                            'Data': data_raw,
-                            'dt_obj': dt,
-                            'Marca': marca or '',
-                            'Titolo': title,
-                            'Motivo': motivo or '',
-                            'Link': link
-                        })
-                except ValueError:
+                    from email.utils import parsedate_to_datetime
+                    dt_obj = parsedate_to_datetime(pub_date_raw)
+                    data_str = dt_obj.strftime("%d/%m/%Y")
+                except Exception:
                     pass
 
-            for value in node.values():
-                esplora(value)
+            marca = ""
+            motivo = description
+            if " - " in titolo:
+                parti = titolo.split(" - ")
+                marca = parti[0]
+                titolo = " - ".join(parti[1:])
 
-        elif isinstance(node, list):
-            for item in node:
-                esplora(item)
+            risultati_rss.append({
+                'Data': data_str,
+                'dt_obj': dt_obj,
+                'Marca': marca,
+                'Titolo': titolo,
+                'Motivo': motivo,
+                'Link': link
+            })
 
-    esplora(json_data)
+        risultati_rss.sort(key=lambda x: x['dt_obj'], reverse=True)
+        return risultati_rss
 
-    # Rimuovi duplicati basandoti sull'URL
-    visti = set()
-    unici = []
-    for item in risultati:
-        if item['Link'] not in visti:
-            visti.add(item['Link'])
-            unici.append(item)
-
-    unici.sort(key=lambda x: x['dt_obj'], reverse=True)
-    return unici
+    except Exception as e:
+        st.error(f"Impossibile recuperare i dati dei richiami alimentari: {e}")
+        return []
 
 
 # ==========================================
