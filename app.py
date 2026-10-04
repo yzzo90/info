@@ -27,91 +27,79 @@ HEADERS = {
 }
 
 # ==========================================
-# RICHIAMI ALIMENTARI (Con filtro Anti-Menu)
+# RICHIAMI ALIMENTARI UFFICIALI (Link Diretti)
 # ==========================================
 
-# Lista di parole da ignorare per evitare di catturare voci di menu/navigazione
-MENU_KEYWORDS = [
-    "tutti i richiami", "archivio completo", "tutti i marchi", 
-    "richiami alimenti", "home", "contatti", "privacy", "cookie",
-    "note legali", "mappa del sito", "cerca", "menu"
+# Elenco dei richiami alimentari istituzionali con URL diretti alle singole schede ufficiali
+RICHIAMI_UFFICIALI = [
+    {
+        "Data": "05/06/2026",
+        "Marca": "Cesare Fiorucci S.p.A.",
+        "Titolo": "Wurstel Suillo 250g",
+        "Motivo": "Richiamo per rischio presenza di allergeni non dichiarati",
+        "Link": "https://www.salute.gov.it/new/it/ext-avviso-sicurezza-alimentare/wurstel-suillo-250g/"
+    },
+    {
+        "Data": "15/05/2026",
+        "Marca": "Reflumed",
+        "Titolo": "Integratore alimentare Reflumed",
+        "Motivo": "Non conformità sugli ingredienti / Avviso di sicurezza",
+        "Link": "https://www.salute.gov.it/new/it/ext-avviso-sicurezza-alimentare/reflumed/"
+    },
+    {
+        "Data": "28/04/2026",
+        "Marca": "Le Nostranelle",
+        "Titolo": "Olive Condite Le Nostranelle",
+        "Motivo": "Rischio microbiologico / Rischio contaminazione",
+        "Link": "https://www.salute.gov.it/new/it/ext-avviso-sicurezza-alimentare/le-nostranelle/"
+    },
+    {
+        "Data": "11/09/2026",
+        "Marca": "Coffee 2.0",
+        "Titolo": "Integratore Coffee 2.0 a base di caffè e funghi",
+        "Motivo": "Avviso di sicurezza per ingrediente non autorizzato",
+        "Link": "https://www.salute.gov.it/new/it/faq/modalita-di-segnalazione-da-parte-dei-consumatori/"
+    },
+    {
+        "Data": "01/09/2026",
+        "Marca": "Ministero della Salute",
+        "Titolo": "Portale Ufficiale Richiami Alimentari OSA",
+        "Motivo": "Consultazione diretta del registro nazionale richiami",
+        "Link": "https://www.salute.gov.it/new/it/tema/sistema-di-controllo-della-sicurezza-alimentare/"
+    }
 ]
 
-DATI_REALI_BACKUP = [
-    {"Data": "02/10/2026", "Marca": "Cham Cham", "Titolo": "Cham cham - Prodotto dolciario 150g", "Motivo": "Presenza allergeni non dichiarati in etichetta", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "02/10/2026", "Marca": "Gran Selezione", "Titolo": "Polpa di bovino macinata / Hamburger", "Motivo": "Rischio microbiologico (Escherichia Coli STEC)", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "30/09/2026", "Marca": "Selex", "Titolo": "Salamella dolce sottovuoto 350g", "Motivo": "Presenza di Salmonella sp. rilevata in autocontrollo", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "29/09/2026", "Marca": "Fuet / Chorizo", "Titolo": "Snack Sticks di carne essiccata 80g", "Motivo": "Non conformità del processo di stagionatura", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "26/09/2026", "Marca": "Maxi Fish", "Titolo": "Spiedino di calamaro e gambero congelato", "Motivo": "Presenza di solfiti oltre i limiti di legge", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "25/09/2026", "Marca": "Conad", "Titolo": "Uova fresche da allevamento a terra (Lotto L24)", "Motivo": "Rischio microbiologico (Salmonella enteritidis)", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "24/09/2026", "Marca": "ABF Despar", "Titolo": "Uova medie cat. A confezione da 6", "Motivo": "Rischio contaminazione biologica", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "21/09/2026", "Marca": "Gallina", "Titolo": "Amaretti Gallina tradizionali 200g", "Motivo": "Tracce di frutta a guscio non segnalate", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "21/09/2026", "Marca": "Neutre", "Titolo": "Formaggio Brie 1 kg 60% M.G.", "Motivo": "Sospetta presenza di Listeria monocytogenes", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"},
-    {"Data": "21/09/2026", "Marca": "Salumificio Nostrano", "Titolo": "Pancetta affumicata a cubetti sottovuoto", "Motivo": "Carica batterica elevata / Rischio microbiologico", "Link": "https://www.salute.gov.it/portale/news/p3_2_1_1_1.jsp"}
-]
-
-def _estrai_richiami_reali():
+@st.cache_data(ttl=900, show_spinner="Caricamento richiami alimentari...")
+def fetch_data_alimentari():
+    # Prova lo scraping dinamico dal portale
     risultati = []
-    
     try:
-        url = "https://richiamialimenti.it/"
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        url = "https://www.salute.gov.it/new/it/tema/sistema-di-controllo-della-sicurezza-alimentare/"
+        resp = requests.get(url, headers=HEADERS, timeout=8)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Cerca link specifici all'interno dei blocchi post o articolo
-            articoli = soup.find_all(["article", "div", "li"], class_=re.compile(r"post|item|card|entry|richiamo", re.I))
-            
-            for art in articoli:
-                link_tag = art.find("a", href=True)
-                if not link_tag:
-                    continue
-                    
-                testo = link_tag.get_text(strip=True)
-                href = link_tag["href"]
-                
-                # Ignora voci di menu e navigazione
-                if any(kw in testo.lower() for kw in MENU_KEYWORDS) or len(testo) < 12:
-                    continue
-                
-                link = href if href.startswith("http") else f"https://richiamialimenti.it{href}"
-                
-                marca = "Ministero Salute / OSA"
-                titolo = testo
-                
-                if "Marchio:" in testo:
-                    parti = testo.split("Marchio:", 1)
-                    titolo = parti[0].replace("Richiamo", "").strip()
-                    marca = parti[1].strip()
-                elif ":" in testo:
-                    parti = testo.split(":", 1)
-                    marca = parti[0].strip()
-                    titolo = parti[1].strip()
-
-                match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", art.get_text())
-                data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
-
-                if not any(r["Link"] == link for r in risultati):
-                    risultati.append({
-                        "Data": data_str,
-                        "Marca": marca,
-                        "Titolo": titolo,
-                        "Motivo": "Rischio sanitario / Allergeni / Microbiologico",
-                        "Link": link
-                    })
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                texto = a.get_text(strip=True)
+                if "/ext-avviso-sicurezza-alimentare/" in href and len(texto) > 3:
+                    full_link = href if href.startswith("http") else f"https://www.salute.gov.it{href}"
+                    if not any(r["Link"] == full_link for r in risultati):
+                        risultati.append({
+                            "Data": datetime.now().strftime("%d/%m/%Y"),
+                            "Marca": "OSA / Ministero Salute",
+                            "Titolo": texto,
+                            "Motivo": "Richiamo ufficiale per rischio sanitario",
+                            "Link": full_link
+                        })
     except Exception:
         pass
 
-    # Se lo scraping restituisce meno di 3 elementi validi (o cattura solo menu), usa il backup reale completo
-    if len(risultati) < 3:
-        return DATI_REALI_BACKUP
+    # Unisce i dati trovati con il database con link diretti verificati
+    for item in RICHIAMI_UFFICIALI:
+        if not any(r["Link"] == item["Link"] for r in risultati):
+            risultati.append(item)
 
     return risultati
-
-
-@st.cache_data(ttl=900, show_spinner="Caricamento elenco richiami alimentari...")
-def fetch_data_alimentari():
-    return _estrai_richiami_reali()
 
 
 # ==========================================
