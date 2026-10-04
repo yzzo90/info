@@ -1,6 +1,7 @@
 import re
 import logging
 import requests
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -21,85 +22,92 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 # ==========================================
-# 1. RICHIAMI ALIMENTARI (Estrazione diretta)
+# 1. RICHIAMI ALIMENTARI (Feed Ufficiale RSS XML)
 # ==========================================
 
-def _estrai_richiami_realtime():
-    """Estrae l'elenco completo dei richiami alimentari ufficiali in Italia."""
+URL_RSS_MINISTERO = "http://www.salute.gov.it/portale/news/RSS_avvisi_richiami_osa.xml"
+
+@st.cache_data(ttl=900, show_spinner="Caricamento richiami alimentari ufficiali...")
+def fetch_data_alimentari():
     risultati = []
     
-    # 1. Scraping dal portale italiano aggregatore di richiami ufficiali
-    url_richiami = "https://richiamialimenti.it/"
+    # 1. Tentativo tramite Feed RSS Ufficiale del Ministero della Salute
     try:
-        resp = requests.get(url_richiami, headers=HEADERS, timeout=12)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Trova tutti i link e gli articoli contenenti richiami
-            for a_tag in soup.find_all("a", href=True):
-                href = a_tag["href"]
-                testo = a_tag.get_text(strip=True)
-                
-                # Se è una scheda di richiamo
-                if ("richiamo-" in href or "ritiro-" in href or "/avviso-" in href or "Richiamo" in testo) and len(testo) > 15:
-                    link_completo = href if href.startswith("http") else f"https://richiamialimenti.it{href.lstrip('/')}"
-                    
-                    # Estrazione Marca e Prodotto dal testo del link o titolo
-                    marca = "Ministero Salute / OSA"
-                    titolo = testo
-                    
-                    if "Marchio:" in testo:
-                        parti = testo.split("Marchio:", 1)
-                        titolo = parti[0].replace("Richiamo", "").strip()
-                        marca = parti[1].strip()
-                    elif ":" in testo:
-                        parti = testo.split(":", 1)
-                        marca = parti[0].strip()
-                        titolo = parti[1].strip()
-                    elif " - " in testo:
-                        parti = testo.split(" - ", 1)
-                        marca = parti[0].strip()
-                        titolo = parti[1].strip()
+        response = requests.get(URL_RSS_MINISTERO, headers=HEADERS, timeout=12)
+        if response.status_code == 200:
+            root = ET.fromstring(response.content)
+            for item in root.findall(".//item"):
+                titolo_raw = item.find("title").text if item.find("title") is not None else ""
+                link = item.find("link").text if item.find("link") is not None else ""
+                pub_date = item.find("pubDate").text if item.find("pubDate") is not None else ""
+                desc = item.find("description").text if item.find("description") is not None else ""
 
-                    # Cerca eventuale data nel formato GG/MM/AAAA
-                    match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo)
-                    data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
+                # Format data
+                data_str = pub_date[:16] if pub_date else datetime.now().strftime("%d/%m/%Y")
 
-                    if not any(r["Link"] == link_completo for r in risultati):
-                        risultati.append({
-                            "Data": data_str,
-                            "Marca": marca,
-                            "Titolo": titolo,
-                            "Motivo": "Rischio sanitario / Microbiologico / Allergeni",
-                            "Link": link_completo
-                        })
+                # Estrazione Marca e Prodotto dal Titolo
+                marca = "Ministero della Salute"
+                titolo = titolo_raw
+                if " - " in titolo_raw:
+                    parti = titolo_raw.split(" - ", 1)
+                    marca, titolo = parti[0].strip(), parti[1].strip()
+                elif ":" in titolo_raw:
+                    parti = titolo_raw.split(":", 1)
+                    marca, titolo = parti[0].strip(), parti[1].strip()
+
+                motivo = BeautifulSoup(desc, "html.parser").get_text(strip=True) if desc else "Richiamo per rischio sanitario / alimentare"
+                if not motivo or len(motivo) < 5:
+                    motivo = "Avviso ufficiale di sicurezza alimentare"
+
+                risultati.append({
+                    "Data": data_str,
+                    "Marca": marca,
+                    "Titolo": titolo,
+                    "Motivo": motivo,
+                    "Link": link
+                })
     except Exception:
         pass
 
-    return risultati
+    # 2. Backup di sicurezza su aggregatore se il feed non restituisce dati
+    if not risultati:
+        try:
+            resp = requests.get("https://richiamialimenti.it/", headers=HEADERS, timeout=10)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for a in soup.find_all("a", href=True):
+                    href = a["href"]
+                    texto = a.get_text(strip=True)
+                    if "richiamo" in href or "ritiro" in href or "Richiamo" in texto:
+                        if len(texto) > 15:
+                            link_comp = href if href.startswith("http") else f"https://richiamialimenti.it{href}"
+                            risultati.append({
+                                "Data": datetime.now().strftime("%d/%m/%Y"),
+                                "Marca": "Richiamo Alimentare",
+                                "Titolo": texto,
+                                "Motivo": "Richiamo di sicurezza alimentare",
+                                "Link": link_comp
+                            })
+        except Exception:
+            pass
 
-
-@st.cache_data(ttl=900, show_spinner="Caricamento tutti i richiami alimentari...")
-def fetch_data_alimentari():
-    dati = _estrai_richiami_realtime()
-    
-    # Se per qualche motivo lo scraping da 0 elementi, restituiamo un elenco informativo
-    if not dati:
-        return [{
+    # 3. Fallback di sicurezza con scheda istituzionale
+    if not risultati:
+        risultati.append({
             "Data": datetime.now().strftime("%d/%m/%Y"),
             "Marca": "Ministero della Salute",
-            "Titolo": "Sito Ufficiale Richiami Alimentari",
-            "Motivo": "Consultazione diretta delle schede di richiamo",
+            "Titolo": "Consultazione Portale Ministero della Salute",
+            "Motivo": "Accedi al sito istituzionale",
             "Link": "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
-        }]
-    
-    return dati
+        })
+
+    return risultati
 
 
 # ==========================================
@@ -163,7 +171,7 @@ def estrai_news_ferrovia():
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
 tab_ferrovia, tab_alimentare = st.tabs(
-    ["🚆 Ferrotramviaria", "🥗 Avvisi Alimentari"]
+    ["Dati Ferrotramviaria", "Avvisi Alimentari"]
 )
 
 # --- TAB 1: FERROTRAMVIARIA ---
