@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 0. CONFIGURAZIONE PAGINA & LOGGING
+# 0. CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
     page_title="Dashboard Avvisi & News", 
@@ -17,7 +17,7 @@ st.set_page_config(
 
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
-# Header aggiornati per simulare un browser reale ed evitare blocchi 403/WAF
+# Headers ad alta fedeltà per evitare il blocco 403 / Cloudflare
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -26,95 +26,90 @@ HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer": "https://www.salute.gov.it/",
+    "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
 # ==========================================
-# 1. AVVISI ALIMENTARI (Ministero della Salute)
+# 1. AVVISI ALIMENTARI (Con Fallback)
 # ==========================================
-URLS_RICHIAMI = [
-    "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari",
-    "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
-    "https://www.salute.gov.it/portale/news/p3_2_1_1.jsp?lingua=italiano&menu=notizie&p=dalministero&id=113",
-]
+URL_MINISTERO = "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
+URL_MIRROR_ALT = "https://richiamialimenti.it/"  # Fonte mirror secondaria
 
-def _fetch_da_html(session):
-    """Esegue lo scraping dell'indice del Ministero della Salute."""
+
+def _fetch_ministero_diretto(session):
+    """Tentativo di scraping diretto sul portale del Ministero."""
     risultati = []
+    resp = session.get(URL_MINISTERO, timeout=10)
+    
+    if resp.status_code == 200:
+        soup = BeautifulSoup(resp.text, "html.parser")
+        cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare|richiam", re.I))
 
-    for url in URLS_RICHIAMI:
-        try:
-            resp = session.get(url, timeout=15, allow_redirects=True)
-            if resp.status_code != 200:
+        for card in cards:
+            link = card.get("href", "")
+            if not link.startswith("http"):
+                link = "https://www.salute.gov.it" + link
+
+            testo = card.get_text(separator=" ", strip=True)
+            if len(testo) < 5:
                 continue
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Cerca qualsiasi link che porti a una scheda o avviso
-            cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare|richiam|avvis", re.I))
-
-            for card in cards:
-                link = card.get("href", "")
-                if not link or link.startswith("#") or "javascript" in link:
-                    continue
-                if not link.startswith("http"):
-                    link = "https://www.salute.gov.it" + link
-
-                testo_card = card.get_text(separator=" ", strip=True)
-                if len(testo_card) < 5:
-                    continue
-
-                # Estrazione data pubblicazione (formato GG/MM/AAAA)
-                data_str = ""
+            match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo)
+            data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
+            try:
+                dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
+            except ValueError:
                 dt_obj = datetime.now()
-                match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo_card)
-                if match_data:
-                    data_str = match_data.group(0)
-                    try:
-                        dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
-                    except ValueError:
-                        pass
 
-                # Estrazione del titolo pulito
-                titolo = testo_card
-                titolo_el = card.find(
-                    ["h3", "h4", "p", "div", "span"],
-                    class_=re.compile(r"title|titolo|heading|name", re.I)
-                )
-                if titolo_el:
-                    titolo = titolo_el.get_text(strip=True)
+            titolo = testo
+            marca = ""
+            if " - " in testo:
+                parti = testo.split(" - ", 1)
+                marca, titolo = parti[0], parti[1]
 
-                marca = ""
-                if " - " in titolo:
-                    parti = titolo.split(" - ", 1)
-                    marca, titolo = parti[0], parti[1]
+            risultati.append({
+                "Data": data_str,
+                "dt_obj": dt_obj,
+                "Marca": marca,
+                "Titolo": titolo,
+                "Motivo": "Richiamo per rischio sanitario / alimentare",
+                "Link": link,
+            })
+    return risultati
 
-                risultati.append({
-                    "Data": data_str or dt_obj.strftime("%d/%m/%Y"),
-                    "dt_obj": dt_obj,
-                    "Marca": marca,
-                    "Titolo": titolo,
-                    "Motivo": "Richiamo per rischio sanitario / alimentare",
-                    "Link": link,
-                })
 
-            if risultati:
-                break
-
-        except Exception:
-            continue
-
-    # Rimuovi duplicati basandoti sul link univoco
-    visti = set()
-    unici = []
-    for r in risultati:
-        if r["Link"] not in visti:
-            visti.add(r["Link"])
-            unici.append(r)
-
-    unici.sort(key=lambda x: x["dt_obj"], reverse=True)
-    return unici
+def _fetch_fonte_secondaria(session):
+    """Tentativo su fonte aperta / aggregatore secondario in caso di blocco WAF."""
+    risultati = []
+    try:
+        resp = session.get(URL_MIRROR_ALT, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            # Cerca i blocchi news del mirror
+            items = soup.find_all(["div", "article", "li"], class_=re.compile(r"richiamo|item|post", re.I))
+            
+            for item in items[:15]:
+                link_tag = item.find("a", href=True)
+                if not link_tag:
+                    continue
+                
+                link = link_tag["href"]
+                titolo = link_tag.get_text(strip=True)
+                
+                if titolo and len(titolo) > 5:
+                    risultati.append({
+                        "Data": datetime.now().strftime("%d/%m/%Y"),
+                        "dt_obj": datetime.now(),
+                        "Marca": "Aggiornamento Recente",
+                        "Titolo": titolo,
+                        "Motivo": "Richiamo di Sicurezza Alimentare",
+                        "Link": link if link.startswith("http") else URL_MIRROR_ALT + link,
+                    })
+    except Exception:
+        pass
+    return risultati
 
 
 @st.cache_data(ttl=1800, show_spinner="Caricamento richiami alimentari...")
@@ -122,14 +117,31 @@ def fetch_data_alimentari():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Inizializza sessione visitando la home per ottenere eventuali cookie
+    # 1. Prova l'accesso diretto
     try:
-        session.get("https://www.salute.gov.it/", timeout=5)
+        dati = _fetch_ministero_diretto(session)
+        if dati:
+            return dati
     except Exception:
         pass
 
-    dati = _fetch_da_html(session)
-    return dati
+    # 2. Prova la fonte secondaria se il Ministero restituisce 403
+    try:
+        dati_sec = _fetch_fonte_secondaria(session)
+        if dati_sec:
+            return dati_sec
+    except Exception:
+        pass
+
+    # 3. Fallback di sicurezza: evita la schermata vuota
+    return [{
+        "Data": datetime.now().strftime("%d/%m/%Y"),
+        "dt_obj": datetime.now(),
+        "Marca": "Info Ministero",
+        "Titolo": "Servizio momentaneamente limitato. Clicca per accedere all'indice originale.",
+        "Motivo": "Verifica diretta sul portale",
+        "Link": URL_MINISTERO
+    }]
 
 
 # ==========================================
@@ -156,7 +168,6 @@ def estrai_avvisi_ferrovia():
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
                 
-                # Evidenzia la parola "sciopero" in rosso
                 titolo = re.sub(
                     r"(sciopero)",
                     r'<span style="color:red; font-weight:bold;">\1</span>',
@@ -224,7 +235,7 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: RICHIAMI ALIMENTARI ---
+# --- TAB 2: RICHAMI ALIMENTARI ---
 with tab_alimentare:
     col_btn, _ = st.columns([1, 4])
     with col_btn:
@@ -234,31 +245,25 @@ with tab_alimentare:
 
     dati_alim = fetch_data_alimentari()
 
-    if dati_alim:
-        df = pd.DataFrame(dati_alim)
+    df = pd.DataFrame(dati_alim)
 
-        search_query = st.text_input(
-            "🔍 Cerca nei richiami alimentari (marca, prodotto o motivo):", ""
-        )
-        if search_query:
-            df = df[
-                df["Marca"].str.contains(search_query, case=False, na=False, regex=False)
-                | df["Titolo"].str.contains(search_query, case=False, na=False, regex=False)
-                | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
-            ]
+    search_query = st.text_input(
+        "🔍 Cerca nei richiami alimentari (es. marca o prodotto):", ""
+    )
+    if search_query:
+        df = df[
+            df["Marca"].str.contains(search_query, case=False, na=False, regex=False)
+            | df["Titolo"].str.contains(search_query, case=False, na=False, regex=False)
+            | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
+        ]
 
-        st.subheader(f"Richiami Registrati ({len(df)})")
+    st.subheader(f"Richiami e Avvisi Sanitari ({len(df)})")
 
-        st.dataframe(
-            df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
-            column_config={
-                "Link": st.column_config.LinkColumn("Scheda Ufficiale", display_text="Apri Scheda")
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.warning(
-            "Nessun dato alimentare disponibile al momento. "
-            "Clicca su 'Ricarica Dati' per riprovare."
-        )
+    st.dataframe(
+        df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
+        column_config={
+            "Link": st.column_config.LinkColumn("Scheda Ufficiale", display_text="Apri Scheda")
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
