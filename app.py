@@ -1,13 +1,10 @@
 import re
-import time
 import logging
 import requests
 from datetime import datetime
-from email.utils import parsedate_to_datetime
 from bs4 import BeautifulSoup
 import streamlit as st
 import pandas as pd
-import xml.etree.ElementTree as ET
 
 # --- Configurazione Pagina Streamlit ---
 st.set_page_config(page_title="Dashboard Avvisi & News", page_icon="📢", layout="wide")
@@ -18,157 +15,95 @@ logging.getLogger("urllib3").setLevel(logging.ERROR)
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json,application/xml,text/html,*/*",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.salute.gov.it/",
     "Accept-Language": "it-IT,it;q=0.9",
 }
-
 
 # ==========================================
 # 1. AVVISI ALIMENTARI (Ministero della Salute)
 # ==========================================
 URL_JSON = "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json"
-URL_RSS = "https://www.salute.gov.it/portale/news/rssRichiami.jsp?tipo=richiami"
 
 
-HEADER_PROFILES = [
-    # Profilo che ha funzionato nel test manuale
-    {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
-        "Accept": "application/json,text/html,*/*",
-        "Accept-Language": "it-IT,it;q=0.9",
-    },
-    HEADERS,
-    {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-        "Accept": "*/*",
-        "Accept-Language": "it-IT,it;q=0.9,en;q=0.5",
-        "Referer": "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
-    },
-]
+@st.cache_data(ttl=3600, show_spinner="Scarico i richiami dal Ministero...")
+def fetch_data_alimentari():
+    session = requests.Session()
+    session.headers.update(HEADERS)
 
-
-def _valido(r, kind):
-    testo = r.content.lstrip()[:20]
-    if kind == "json":
-        return testo.startswith(b"{")
-    return testo.startswith(b"<?xml") or testo.startswith(b"<rss")
-
-
-def _get(url, log, nome, kind):
-    """Prova più profili di header con una sessione; scarta le pagine di blocco."""
-    for i, headers in enumerate(HEADER_PROFILES, 1):
+    try:
+        # Ottieni cookie iniziali per superare eventuali controlli/WAF
         try:
-            s = requests.Session()
-            try:  # visita la home per ottenere eventuali cookie del WAF
-                s.get("https://www.salute.gov.it/new/it/", headers=headers, timeout=15)
-            except Exception:
-                pass
-            r = s.get(url, headers=headers, timeout=60)
-            log.append(f"{nome} profilo {i}: HTTP {r.status_code}, {len(r.content)} byte")
-            if r.status_code == 200 and _valido(r, kind):
-                return r
-            anteprima = r.text[:150].replace("\n", " ")
-            log.append(f"  risposta non valida, inizio: {anteprima}")
-        except Exception as e:
-            log.append(f"{nome} profilo {i}: ERRORE {type(e).__name__}: {e}")
-        time.sleep(2)
-    return None
+            session.get("https://www.salute.gov.it/", timeout=10)
+        except Exception:
+            pass
 
+        response = session.get(URL_JSON, timeout=15)
+        response.raise_for_status()
+        json_data = response.json()
 
-def _parse_json(json_data):
+    except Exception as e:
+        st.error(f"Errore nel recupero dati dal Ministero della Salute: {e}")
+        return []
+
     risultati = []
 
     def esplora(node):
         if isinstance(node, dict):
+            data_raw = node.get("dataPubblicazione") or node.get("field_data_pubblicazione")
+            marca = node.get("field_marca")
+            title = node.get("title")
+
+            motivo = None
+            motivo_obj = node.get("relationships", {}).get("field_motivo_segnalazione")
+            if isinstance(motivo_obj, dict):
+                motivo = motivo_obj.get("name")
+
+            link = None
             path = node.get("path")
-            alias = path.get("alias") if isinstance(path, dict) else None
-            g, m, a = node.get("field_giorno"), node.get("field_mese"), node.get("field_anno")
+            if isinstance(path, dict):
+                alias = path.get("alias")
+                if alias:
+                    link = "https://www.salute.gov.it/new/it" + alias
 
-            if alias and node.get("title") and g and m and a:
+            if data_raw and title and link:
                 try:
-                    dt = datetime(int(a), int(m), int(g))
-                except (ValueError, TypeError):
-                    dt = None
+                    dt = datetime.strptime(data_raw, "%d/%m/%Y")
+                    if dt.year == CURRENT_YEAR:
+                        risultati.append({
+                            "Data": data_raw,
+                            "dt_obj": dt,
+                            "Marca": marca or "",
+                            "Titolo": title,
+                            "Motivo": motivo or "",
+                            "Link": link,
+                        })
+                except ValueError:
+                    pass
 
-                if dt and dt.year == CURRENT_YEAR:
-                    risultati.append({
-                        "Data": dt.strftime("%d/%m/%Y"),
-                        "dt_obj": dt,
-                        "Marca": node.get("field_marca") or "",
-                        "Titolo": node.get("field_prodotto") or node["title"],
-                        "Motivo": node.get("field_sostanza") or "",
-                        "Link": "https://www.salute.gov.it/new/it" + alias,
-                    })
+            for value in node.values():
+                esplora(value)
 
-            for v in node.values():
-                esplora(v)
         elif isinstance(node, list):
-            for i in node:
-                esplora(i)
+            for item in node:
+                esplora(item)
 
     esplora(json_data)
-    unici = {r["Link"]: r for r in risultati}.values()
-    return sorted(unici, key=lambda x: x["dt_obj"], reverse=True)
 
+    # Rimuovi duplicati basandoti sull'URL
+    visti = set()
+    unici = []
+    for item in risultati:
+        if item["Link"] not in visti:
+            visti.add(item["Link"])
+            unici.append(item)
 
-def _parse_rss(content):
-    root = ET.fromstring(content.strip())
-    out = []
-    for item in root.findall(".//item"):
-        titolo = item.findtext("title", default="").strip()
-        link = item.findtext("link", default="").strip()
-        if not titolo or not link:
-            continue
-        try:
-            dt = parsedate_to_datetime(item.findtext("pubDate", default="")).replace(tzinfo=None)
-        except Exception:
-            dt = datetime.now()
-        marca = ""
-        if " - " in titolo:
-            marca, titolo = titolo.split(" - ", 1)
-        out.append({
-            "Data": dt.strftime("%d/%m/%Y"), "dt_obj": dt, "Marca": marca,
-            "Titolo": titolo, "Motivo": item.findtext("description", default="").strip(),
-            "Link": link,
-        })
-    return sorted(out, key=lambda x: x["dt_obj"], reverse=True)
-
-
-@st.cache_data(ttl=3600, show_spinner="Scarico i richiami dal Ministero...")
-def _fetch_alimentari_cached():
-    # Se fallisce solleva un'eccezione: Streamlit NON mette in cache gli errori
-    log = []
-
-    r = _get(URL_JSON, log, "JSON", "json")
-    if r is not None:
-        try:
-            dati = _parse_json(r.json())
-            log.append(f"JSON parsato: {len(dati)} record (anno {CURRENT_YEAR})")
-            if dati:
-                return dati, log
-        except Exception as e:
-            log.append(f"JSON parsing ERRORE: {e}")
-
-    r = _get(URL_RSS, log, "RSS", "xml")
-    if r is not None:
-        try:
-            dati = _parse_rss(r.content)
-            log.append(f"RSS parsato: {len(dati)} record")
-            if dati:
-                return dati, log
-        except Exception as e:
-            log.append(f"RSS parsing ERRORE: {e}")
-
-    raise RuntimeError("\n".join(log))
-
-
-def fetch_data_alimentari():
-    try:
-        return _fetch_alimentari_cached()
-    except RuntimeError as e:
-        return [], str(e).split("\n")
+    # Ordina per data decrescente
+    unici.sort(key=lambda x: x["dt_obj"], reverse=True)
+    return unici
 
 
 # ==========================================
@@ -260,11 +195,11 @@ with tab_ferrovia:
             st.info("Nessuna news trovata.")
 
 with tab_alimentare:
-    dati_alim, log_alim = fetch_data_alimentari()
+    dati_alim = fetch_data_alimentari()
 
-    with st.expander("🛠️ Log recupero dati"):
-        st.code("\n".join(log_alim))
-        if st.button("Svuota cache e riprova"):
+    col_btn, _ = st.columns([1, 4])
+    with col_btn:
+        if st.button("🔄 Ricarica Dati Alimentari"):
             st.cache_data.clear()
             st.rerun()
 
@@ -285,9 +220,11 @@ with tab_alimentare:
 
         st.dataframe(
             df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
-            column_config={"Link": st.column_config.LinkColumn("Link Scheda", display_text="Apri")},
+            column_config={
+                "Link": st.column_config.LinkColumn("Link Scheda", display_text="Apri")
+            },
             use_container_width=True,
             hide_index=True,
         )
     else:
-        st.warning("Nessun dato alimentare disponibile al momento. Controlla il log qui sopra.")
+        st.warning("Nessun dato alimentare disponibile al momento.")
