@@ -15,14 +15,13 @@ st.set_page_config(
     layout="wide"
 )
 
-CURRENT_YEAR = datetime.now().year
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/128.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -38,7 +37,7 @@ URLS_RICHIAMI = [
 ]
 
 def _fetch_da_html(session):
-    """Scraping con tentativi su più percorsi del portale del Ministero."""
+    """Esegue lo scraping dell'indice del Ministero della Salute."""
     risultati = []
 
     for url in URLS_RICHIAMI:
@@ -49,10 +48,9 @@ def _fetch_da_html(session):
 
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Seleziona i link relativi alle schede di avviso sicurezza alimentare
+            # Cerca i link diretti alle schede dei richiami
             cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare", re.I))
 
-            # Fallback generico se la classe/href varia
             if not cards:
                 cards = [
                     a for a in soup.find_all("a", href=True)
@@ -66,7 +64,7 @@ def _fetch_da_html(session):
 
                 testo_card = card.get_text(separator=" ", strip=True)
 
-                # Estrazione data pubblicazione (es. 15/05/2026)
+                # Estrazione data pubblicazione
                 data_str = ""
                 dt_obj = datetime.now()
                 match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo_card)
@@ -77,7 +75,6 @@ def _fetch_da_html(session):
                     except ValueError:
                         pass
 
-                # Pulizia titolo e marca
                 titolo = testo_card
                 titolo_el = card.find(
                     ["h3", "h4", "p", "div", "span"],
@@ -107,7 +104,7 @@ def _fetch_da_html(session):
         except Exception:
             continue
 
-    # Rimuovi duplicati basandoti sul link unico
+    # Rimuovi duplicati mantenendo la scheda univoca
     visti = set()
     unici = []
     for r in risultati:
@@ -124,7 +121,7 @@ def fetch_data_alimentari():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Inizializza cookie di sessione sulla home
+    # Inizializza sessione sulla home per catturare eventuali cookie/tokens
     try:
         session.get("https://www.salute.gov.it/new/it/", timeout=5)
     except Exception:
@@ -193,7 +190,7 @@ def estrai_news_ferrovia():
 
 
 # ==========================================
-# 3. INTERFACCIA STREAMLIT
+# 3. INTERFACCIA UTENTE STREAMLIT
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
@@ -226,7 +223,7 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: RICHAMI ALIMENTARI ---
+# --- TAB 2: RICHIAMI ALIMENTARI ---
 with tab_alimentare:
     col_btn, _ = st.columns([1, 4])
     with col_btn:
@@ -240,7 +237,7 @@ with tab_alimentare:
         df = pd.DataFrame(dati_alim)
 
         search_query = st.text_input(
-            "🔍 Cerca nei richiami alimentari (es. marca, prodotto o motivo):", ""
+            "🔍 Cerca nei richiami alimentari (marca, prodotto o motivo):", ""
         )
         if search_query:
             df = df[
@@ -261,5 +258,6 @@ with tab_alimentare:
         )
     else:
         st.warning(
-            "Nessun dato alimentare disponibile al momento. Clicca su 'Ricarica Dati' per riprovare."
+            "Nessun dato alimentare disponibile al momento dal server del Ministero. "
+            "Clicca su 'Ricarica Dati' tra qualche secondo."
         )
