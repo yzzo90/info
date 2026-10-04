@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 0. CONFIGURAZIONE GENERALE
+# 0. CONFIGURAZIONE PAGINA & LOGGING
 # ==========================================
 st.set_page_config(
     page_title="Dashboard Avvisi & News", 
@@ -31,70 +31,83 @@ HEADERS = {
 # ==========================================
 # 1. AVVISI ALIMENTARI (Ministero della Salute)
 # ==========================================
-URL_HTML_ALIMENTI = (
-    "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
-)
+URLS_RICHIAMI = [
+    "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari",
+    "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
+    "https://www.salute.gov.it/new/it/tema/sistema-di-controllo-della-sicurezza-alimentare/",
+]
 
 def _fetch_da_html(session):
-    """Esegue lo scraping direttamente dall'indice del portale del Ministero."""
-    resp = session.get(URL_HTML_ALIMENTI, timeout=15)
-    resp.raise_for_status()
-
-    soup = BeautifulSoup(resp.text, "html.parser")
+    """Scraping con tentativi su più percorsi del portale del Ministero."""
     risultati = []
 
-    # Cerca i link relativi alle schede di richiamo
-    cards = soup.select("a[href*='ext-avviso-sicurezza-alimentare']")
-    
-    # Fallback se la struttura HTML delle classi cambia leggermente
-    if not cards:
-        cards = [
-            a for a in soup.find_all("a", href=True) 
-            if "/avvisi/" in a["href"] or "richiam" in a["href"]
-        ]
+    for url in URLS_RICHIAMI:
+        try:
+            resp = session.get(url, timeout=12, allow_redirects=True)
+            if resp.status_code != 200:
+                continue
 
-    for card in cards:
-        link = card.get("href", "")
-        if not link.startswith("http"):
-            link = "https://www.salute.gov.it" + link
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Cerca elementi del titolo
-        titolo_el = card.find(
-            ["h3", "h4", "p", "div", "span"],
-            class_=re.compile(r"title|titolo|heading|name", re.I),
-        )
-        titolo_testo = (
-            titolo_el.get_text(strip=True) if titolo_el else card.get_text(strip=True)
-        )
+            # Seleziona i link relativi alle schede di avviso sicurezza alimentare
+            cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare", re.I))
 
-        # Cerca la data pubblicazione nel testo
-        data_str = ""
-        dt_obj = datetime.now()
-        data_match = re.search(r"\b\d{2}/\d{2}/\d{4}\b", card.get_text())
-        if data_match:
-            data_str = data_match.group(0)
-            try:
-                dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
-            except ValueError:
-                pass
+            # Fallback generico se la classe/href varia
+            if not cards:
+                cards = [
+                    a for a in soup.find_all("a", href=True)
+                    if "/avvisi/" in a["href"] or "richiam" in a["href"]
+                ]
 
-        if titolo_testo and link:
-            marca = ""
-            titolo = titolo_testo
-            if " - " in titolo_testo:
-                parti = titolo_testo.split(" - ", 1)
-                marca, titolo = parti[0], parti[1]
+            for card in cards:
+                link = card.get("href", "")
+                if not link.startswith("http"):
+                    link = "https://www.salute.gov.it" + link
 
-            risultati.append({
-                "Data": data_str or dt_obj.strftime("%d/%m/%Y"),
-                "dt_obj": dt_obj,
-                "Marca": marca,
-                "Titolo": titolo,
-                "Motivo": "Richiamo per rischio sanitario / alimentare",
-                "Link": link,
-            })
+                testo_card = card.get_text(separator=" ", strip=True)
 
-    # Rimuovi duplicati basandoti sul link
+                # Estrazione data pubblicazione (es. 15/05/2026)
+                data_str = ""
+                dt_obj = datetime.now()
+                match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo_card)
+                if match_data:
+                    data_str = match_data.group(0)
+                    try:
+                        dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
+                    except ValueError:
+                        pass
+
+                # Pulizia titolo e marca
+                titolo = testo_card
+                titolo_el = card.find(
+                    ["h3", "h4", "p", "div", "span"],
+                    class_=re.compile(r"title|titolo|heading|name", re.I)
+                )
+                if titolo_el:
+                    titolo = titolo_el.get_text(strip=True)
+
+                marca = ""
+                if " - " in titolo:
+                    parti = titolo.split(" - ", 1)
+                    marca, titolo = parti[0], parti[1]
+
+                if link:
+                    risultati.append({
+                        "Data": data_str or dt_obj.strftime("%d/%m/%Y"),
+                        "dt_obj": dt_obj,
+                        "Marca": marca,
+                        "Titolo": titolo,
+                        "Motivo": "Richiamo per rischio sanitario / alimentare",
+                        "Link": link,
+                    })
+
+            if risultati:
+                break
+
+        except Exception:
+            continue
+
+    # Rimuovi duplicati basandoti sul link unico
     visti = set()
     unici = []
     for r in risultati:
@@ -111,61 +124,15 @@ def fetch_data_alimentari():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # 1. Scraping HTML dall'indice ufficiale del Ministero
+    # Inizializza cookie di sessione sulla home
     try:
         session.get("https://www.salute.gov.it/new/it/", timeout=5)
-        dati = _fetch_da_html(session)
-        if dati:
-            return dati
-    except Exception as e:
-        st.warning(f"Errore durante lo scraping dell'indice HTML: {e}")
-
-    # 2. Fallback facoltativo via API JSON Gatsby
-    try:
-        res = session.get(
-            "https://www.salute.gov.it/new/page-data/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/page-data.json",
-            timeout=10,
-        )
-        if res.status_code == 200 and res.content.lstrip().startswith((b"{", b"[")):
-            json_data = res.json()
-            risultati_json = []
-
-            def esplora(node):
-                if isinstance(node, dict):
-                    data_raw = node.get("dataPubblicazione") or node.get("field_data_pubblicazione")
-                    title = node.get("title")
-                    path = node.get("path")
-                    alias = path.get("alias") if isinstance(path, dict) else None
-
-                    if data_raw and title and alias:
-                        link = "https://www.salute.gov.it/new/it" + alias
-                        try:
-                            dt = datetime.strptime(data_raw, "%d/%m/%Y")
-                            if dt.year == CURRENT_YEAR:
-                                risultati_json.append({
-                                    "Data": data_raw,
-                                    "dt_obj": dt,
-                                    "Marca": node.get("field_marca") or "",
-                                    "Titolo": title,
-                                    "Motivo": "Richiamo alimentare",
-                                    "Link": link,
-                                })
-                        except ValueError:
-                            pass
-
-                    for v in node.values():
-                        esplora(v)
-                elif isinstance(node, list):
-                    for item in node:
-                        esplora(item)
-
-            esplora(json_data)
-            if risultati_json:
-                return sorted(risultati_json, key=lambda x: x["dt_obj"], reverse=True)
     except Exception:
         pass
 
-    return []
+    dati = _fetch_da_html(session)
+    return dati
+
 
 # ==========================================
 # 2. FERROTRAMVIARIA (Avvisi & News)
@@ -190,6 +157,8 @@ def estrai_avvisi_ferrovia():
                 titolo_raw = title_tag.get_text(strip=True)
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
+                
+                # Evidenzia la parola "sciopero" in rosso
                 titolo = re.sub(
                     r"(sciopero)",
                     r'<span style="color:red; font-weight:bold;">\1</span>',
@@ -222,20 +191,22 @@ def estrai_news_ferrovia():
     except Exception:
         return []
 
+
 # ==========================================
-# 3. INTERFACCIA UTENTE STREAMLIT
+# 3. INTERFACCIA STREAMLIT
 # ==========================================
-st.title("📌 Centro Info: Ferrotramviaria & Sicurezza Alimentare")
+st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
 tab_ferrovia, tab_alimentare = st.tabs(
-    ["Dati Ferrotramviaria", "Avvisi Alimentari"]
+    ["🚆 Ferrotramviaria", "🥗 Avvisi Alimentari"]
 )
 
+# --- TAB 1: FERROTRAMVIARIA ---
 with tab_ferrovia:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("🔔 Avvisi Ferrotramviaria")
+        st.subheader("🔔 Avvisi di Servizio")
         avvisi_ft = estrai_avvisi_ferrovia()
         if avvisi_ft:
             for idx, item in enumerate(avvisi_ft, 1):
@@ -244,17 +215,18 @@ with tab_ferrovia:
                     unsafe_allow_html=True
                 )
         else:
-            st.info("Nessun avviso trovato.")
+            st.info("Nessun avviso di servizio al momento.")
 
     with col2:
-        st.subheader("📰 News Ferrotramviaria")
+        st.subheader("📰 Ultime News")
         news_ft = estrai_news_ferrovia()
         if news_ft:
             for idx, item in enumerate(news_ft, 1):
                 st.markdown(f"{idx}. [{item['titolo']}]({item['link']})")
         else:
-            st.info("Nessuna news trovata.")
+            st.info("Nessuna news disponibile al momento.")
 
+# --- TAB 2: RICHAMI ALIMENTARI ---
 with tab_alimentare:
     col_btn, _ = st.columns([1, 4])
     with col_btn:
@@ -268,7 +240,7 @@ with tab_alimentare:
         df = pd.DataFrame(dati_alim)
 
         search_query = st.text_input(
-            "🔍 Cerca nei richiami alimentari (marca, prodotto, motivo...):", ""
+            "🔍 Cerca nei richiami alimentari (es. marca, prodotto o motivo):", ""
         )
         if search_query:
             df = df[
@@ -277,15 +249,17 @@ with tab_alimentare:
                 | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
             ]
 
-        st.subheader(f"Avvisi Sicurezza Alimentare - {len(df)} risultati")
+        st.subheader(f"Richiami Registrati ({len(df)})")
 
         st.dataframe(
             df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
             column_config={
-                "Link": st.column_config.LinkColumn("Link Scheda", display_text="Apri")
+                "Link": st.column_config.LinkColumn("Scheda Ufficiale", display_text="Apri Scheda")
             },
             use_container_width=True,
             hide_index=True,
         )
     else:
-        st.warning("Nessun dato alimentare disponibile al momento. Clicca su 'Ricarica Dati' per riprovare.")
+        st.warning(
+            "Nessun dato alimentare disponibile al momento. Clicca su 'Ricarica Dati' per riprovare."
+        )
