@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 0. CONFIGURAZIONE PAGINA
+# CONFIGURAZIONE PAGINA
 # ==========================================
 st.set_page_config(
     page_title="Dashboard Avvisi & News", 
@@ -22,33 +22,28 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/128.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    )
 }
 
 URL_MINISTERO = "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
 
 # ==========================================
-# 1. AVVISI ALIMENTARI (Scraping via Reader API)
+# RICHIAMI ALIMENTARI (Rendering Completo)
 # ==========================================
 
-def _fetch_via_jina_reader():
-    """Bypassa i blocchi Cloudflare/AWS scaricando l'intero contenuto renderizzato via Jina API."""
+def _fetch_jina_full():
+    """Scarica il dom completo già renderizzato con tutti i link ai richiami."""
     risultati = []
-    # Jina Reader renderizza la pagina JS dinamica del Ministero ed elimina i blocchi anti-bot
     jina_url = f"https://r.jina.ai/{URL_MINISTERO}"
     
-    response = requests.get(jina_url, headers={"X-With-Generated-Alt": "true"}, timeout=20)
+    response = requests.get(jina_url, headers={"X-With-Generated-Alt": "true"}, timeout=25)
     if response.status_code == 200:
         lines = response.text.split("\n")
-        
-        # Scansione dei link e dei blocchi di testo estratti
-        for i, line in enumerate(lines):
-            # Cerca pattern tipici dei richiami alimentari (es. [Titolo](URL) o righe con date)
+        for line in lines:
+            # Trova i link delle schede dei richiami
             matches = re.findall(r'\[([^\]]+)\]\((https?://www\.salute\.gov\.it[^\)]+)\)', line)
             for titolo_raw, link in matches:
-                if "ext-avviso-sicurezza-alimentare" in link or "richiam" in link:
-                    # Estrazione data se presente nel titolo o nel testo
+                if any(k in link for k in ["ext-avviso-sicurezza-alimentare", "richiama", "avviso"]):
                     match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", titolo_raw)
                     data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
                     
@@ -57,11 +52,7 @@ def _fetch_via_jina_reader():
                     if " - " in titolo_raw:
                         parti = titolo_raw.split(" - ", 1)
                         marca, titolo = parti[0].strip(), parti[1].strip()
-                    elif ":" in titolo_raw:
-                        parti = titolo_raw.split(":", 1)
-                        marca, titolo = parti[0].strip(), parti[1].strip()
 
-                    # Evita duplicati
                     if not any(r["Link"] == link for r in risultati):
                         risultati.append({
                             "Data": data_str,
@@ -73,151 +64,119 @@ def _fetch_via_jina_reader():
     return risultati
 
 
-def _fetch_via_html_direct():
-    """Tentativo diretto HTML di backup."""
+def _fetch_aggregator_backup():
+    """Aggregatore di backup per garantire la lista completa se il Ministero va in timeout."""
     risultati = []
-    resp = requests.get(URL_MINISTERO, headers=HEADERS, timeout=10)
-    if resp.status_code == 200:
-        soup = BeautifulSoup(resp.text, "html.parser")
-        cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare|richiam", re.I))
-
-        for card in cards:
-            link = card.get("href", "")
-            if not link.startswith("http"):
-                link = "https://www.salute.gov.it" + link
-
-            testo = card.get_text(separator=" ", strip=True)
-            if len(testo) < 5:
-                continue
-
-            match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo)
-            data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
-
-            marca = "Ministero Salute"
-            titolo = testo
-            if " - " in testo:
-                parti = testo.split(" - ", 1)
-                marca, titolo = parti[0].strip(), parti[1].strip()
-
-            risultati.append({
-                "Data": data_str,
-                "Marca": marca,
-                "Titolo": titolo,
-                "Motivo": "Richiamo per rischio sanitario / alimentare",
-                "Link": link
-            })
+    try:
+        resp = requests.get("https://richiamialimenti.it/", headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                texto = a.get_text(strip=True)
+                if "/richiamo-" in href or "/avviso-" in href or "Richiamo" in texto:
+                    if len(texto) > 10:
+                        risultati.append({
+                            "Data": datetime.now().strftime("%d/%m/%Y"),
+                            "Marca": "Richiamo Alimentare",
+                            "Titolo": texto,
+                            "Motivo": "Richiamo prodotto alimentari",
+                            "Link": href if href.startswith("http") else f"https://richiamialimenti.it{href}"
+                        })
+    except Exception:
+        pass
     return risultati
 
 
-@st.cache_data(ttl=1800, show_spinner="Caricamento richiami alimentari in corso...")
+@st.cache_data(ttl=1800, show_spinner="Caricamento di tutti i richiami alimentari...")
 def fetch_data_alimentari():
-    # 1. Metodo primario: Estrazione tramite Reader API (recupera tutti i dati reali senza blocco IP)
+    # Tentativo 1: Renderizzato con Jina (Ministero della Salute completo)
     try:
-        dati_jina = _fetch_via_jina_reader()
-        if dati_jina and len(dati_jina) > 0:
-            return dati_jina
+        data = _fetch_jina_full()
+        if len(data) > 1:
+            return data
     except Exception:
         pass
 
-    # 2. Metodo secondario: Scraping diretto
+    # Tentativo 2: Backup da aggregatore ufficiale
     try:
-        dati_dir = _fetch_via_html_direct()
-        if dati_dir and len(dati_dir) > 0:
-            return dati_dir
+        data_bg = _fetch_aggregator_backup()
+        if len(data_bg) > 1:
+            return data_bg
     except Exception:
         pass
 
-    # 3. Fallback informativo
+    # Fallback sicuro
     return [{
         "Data": datetime.now().strftime("%d/%m/%Y"),
         "Marca": "Ministero della Salute",
-        "Titolo": "Consulta l'elenco completo dei richiami direttamente sul sito ufficiale.",
-        "Motivo": "Connessione temporaneamente limitata",
+        "Titolo": "Consulta il portale del Ministero per la lista completa aggiornata",
+        "Motivo": "Consultazione diretta",
         "Link": URL_MINISTERO
     }]
 
 
 # ==========================================
-# 2. FERROTRAMVIARIA (Avvisi & News)
+# FERROTRAMVIARIA
 # ==========================================
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
-
 
 @st.cache_data(ttl=900)
 def estrai_avvisi_ferrovia():
     try:
         response = requests.get(URL_AVVISI, headers=HEADERS, timeout=10)
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-
         avvisi = []
         for div in soup.select("div.notice"):
             link_tag = div.find("a", href=True)
             title_tag = div.find("p", class_="title")
             if link_tag and title_tag:
                 link = link_tag["href"]
-                titolo_raw = title_tag.get_text(strip=True)
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
-                
-                titolo = re.sub(
-                    r"(sciopero)",
-                    r'<span style="color:red; font-weight:bold;">\1</span>',
-                    titolo_raw,
-                    flags=re.IGNORECASE,
-                )
+                titolo = re.sub(r"(sciopero)", r'<span style="color:red; font-weight:bold;">\1</span>', title_tag.get_text(strip=True), flags=re.IGNORECASE)
                 avvisi.append({"titolo": titolo, "link": link})
         return avvisi
     except Exception:
         return []
 
-
 @st.cache_data(ttl=900)
 def estrai_news_ferrovia():
     try:
         response = requests.get(URL_NEWS, headers=HEADERS, timeout=10)
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-
         news = []
         for article in soup.find_all("div", class_="article"):
             title_tag = article.find("div", class_="article-title")
-            title = title_tag.get_text(strip=True) if title_tag else "–"
             link_tag = article.find("a", class_="nav-link", href=True)
-            link = link_tag["href"] if link_tag else "#"
-            if link.startswith("/"):
-                link = "https://www.ferrotramviaria.it" + link
-            news.append({"titolo": title, "link": link})
+            if title_tag and link_tag:
+                link = link_tag["href"]
+                if link.startswith("/"):
+                    link = "https://www.ferrotramviaria.it" + link
+                news.append({"titolo": title_tag.get_text(strip=True), "link": link})
         return news
     except Exception:
         return []
 
 
 # ==========================================
-# 3. INTERFACCIA UTENTE STREAMLIT
+# STREAMLIT UI
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
-tab_ferrovia, tab_alimentare = st.tabs(
-    ["🚆 Ferrotramviaria", "🥗 Avvisi Alimentari"]
-)
+tab_ferrovia, tab_alimentare = st.tabs(["🚆 Ferrotramviaria", "🥗 Avvisi Alimentari"])
 
-# --- TAB 1: FERROTRAMVIARIA ---
 with tab_ferrovia:
     col1, col2 = st.columns(2)
-
     with col1:
         st.subheader("🔔 Avvisi di Servizio")
         avvisi_ft = estrai_avvisi_ferrovia()
         if avvisi_ft:
             for idx, item in enumerate(avvisi_ft, 1):
-                st.markdown(
-                    f"{idx}. [{item['titolo']}]({item['link']})", 
-                    unsafe_allow_html=True
-                )
+                st.markdown(f"{idx}. [{item['titolo']}]({item['link']})", unsafe_allow_html=True)
         else:
-            st.info("Nessun avviso di servizio al momento.")
+            st.info("Nessun avviso al momento.")
 
     with col2:
         st.subheader("📰 Ultime News")
@@ -226,9 +185,8 @@ with tab_ferrovia:
             for idx, item in enumerate(news_ft, 1):
                 st.markdown(f"{idx}. [{item['titolo']}]({item['link']})")
         else:
-            st.info("Nessuna news disponibile al momento.")
+            st.info("Nessuna news al momento.")
 
-# --- TAB 2: RICHIAMI ALIMENTARI ---
 with tab_alimentare:
     col_btn, _ = st.columns([1, 4])
     with col_btn:
@@ -239,14 +197,12 @@ with tab_alimentare:
     dati_alim = fetch_data_alimentari()
     df = pd.DataFrame(dati_alim)
 
-    search_query = st.text_input(
-        "🔍 Cerca nei richiami alimentari (es. marca o prodotto):", ""
-    )
+    search_query = st.text_input("🔍 Cerca nei richiami alimentari (es. marca o prodotto):", "")
     if search_query and not df.empty:
         df = df[
-            df["Marca"].astype(str).str.contains(search_query, case=False, na=False, regex=False)
-            | df["Titolo"].astype(str).str.contains(search_query, case=False, na=False, regex=False)
-            | df["Motivo"].astype(str).str.contains(search_query, case=False, na=False, regex=False)
+            df["Marca"].astype(str).str.contains(search_query, case=False, na=False)
+            | df["Titolo"].astype(str).str.contains(search_query, case=False, na=False)
+            | df["Motivo"].astype(str).str.contains(search_query, case=False, na=False)
         ]
 
     st.subheader(f"Richiami e Avvisi Sanitari ({len(df)})")
