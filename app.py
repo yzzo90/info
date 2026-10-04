@@ -17,6 +17,7 @@ st.set_page_config(
 
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
+# Header aggiornati per simulare un browser reale ed evitare blocchi 403/WAF
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -25,6 +26,8 @@ HEADERS = {
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://www.salute.gov.it/",
+    "Connection": "keep-alive",
 }
 
 # ==========================================
@@ -33,7 +36,7 @@ HEADERS = {
 URLS_RICHIAMI = [
     "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari",
     "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
-    "https://www.salute.gov.it/new/it/tema/sistema-di-controllo-della-sicurezza-alimentare/",
+    "https://www.salute.gov.it/portale/news/p3_2_1_1.jsp?lingua=italiano&menu=notizie&p=dalministero&id=113",
 ]
 
 def _fetch_da_html(session):
@@ -42,29 +45,27 @@ def _fetch_da_html(session):
 
     for url in URLS_RICHIAMI:
         try:
-            resp = session.get(url, timeout=12, allow_redirects=True)
+            resp = session.get(url, timeout=15, allow_redirects=True)
             if resp.status_code != 200:
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Cerca i link diretti alle schede dei richiami
-            cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare", re.I))
-
-            if not cards:
-                cards = [
-                    a for a in soup.find_all("a", href=True)
-                    if "/avvisi/" in a["href"] or "richiam" in a["href"]
-                ]
+            # Cerca qualsiasi link che porti a una scheda o avviso
+            cards = soup.find_all("a", href=re.compile(r"ext-avviso-sicurezza-alimentare|richiam|avvis", re.I))
 
             for card in cards:
                 link = card.get("href", "")
+                if not link or link.startswith("#") or "javascript" in link:
+                    continue
                 if not link.startswith("http"):
                     link = "https://www.salute.gov.it" + link
 
                 testo_card = card.get_text(separator=" ", strip=True)
+                if len(testo_card) < 5:
+                    continue
 
-                # Estrazione data pubblicazione
+                # Estrazione data pubblicazione (formato GG/MM/AAAA)
                 data_str = ""
                 dt_obj = datetime.now()
                 match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo_card)
@@ -75,6 +76,7 @@ def _fetch_da_html(session):
                     except ValueError:
                         pass
 
+                # Estrazione del titolo pulito
                 titolo = testo_card
                 titolo_el = card.find(
                     ["h3", "h4", "p", "div", "span"],
@@ -88,15 +90,14 @@ def _fetch_da_html(session):
                     parti = titolo.split(" - ", 1)
                     marca, titolo = parti[0], parti[1]
 
-                if link:
-                    risultati.append({
-                        "Data": data_str or dt_obj.strftime("%d/%m/%Y"),
-                        "dt_obj": dt_obj,
-                        "Marca": marca,
-                        "Titolo": titolo,
-                        "Motivo": "Richiamo per rischio sanitario / alimentare",
-                        "Link": link,
-                    })
+                risultati.append({
+                    "Data": data_str or dt_obj.strftime("%d/%m/%Y"),
+                    "dt_obj": dt_obj,
+                    "Marca": marca,
+                    "Titolo": titolo,
+                    "Motivo": "Richiamo per rischio sanitario / alimentare",
+                    "Link": link,
+                })
 
             if risultati:
                 break
@@ -104,7 +105,7 @@ def _fetch_da_html(session):
         except Exception:
             continue
 
-    # Rimuovi duplicati mantenendo la scheda univoca
+    # Rimuovi duplicati basandoti sul link univoco
     visti = set()
     unici = []
     for r in risultati:
@@ -121,9 +122,9 @@ def fetch_data_alimentari():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # Inizializza sessione sulla home per catturare eventuali cookie/tokens
+    # Inizializza sessione visitando la home per ottenere eventuali cookie
     try:
-        session.get("https://www.salute.gov.it/new/it/", timeout=5)
+        session.get("https://www.salute.gov.it/", timeout=5)
     except Exception:
         pass
 
@@ -258,6 +259,6 @@ with tab_alimentare:
         )
     else:
         st.warning(
-            "Nessun dato alimentare disponibile al momento dal server del Ministero. "
-            "Clicca su 'Ricarica Dati' tra qualche secondo."
+            "Nessun dato alimentare disponibile al momento. "
+            "Clicca su 'Ricarica Dati' per riprovare."
         )
