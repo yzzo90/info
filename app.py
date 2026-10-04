@@ -21,112 +21,85 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/128.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 # ==========================================
-# 1. AVVISI ALIMENTARI (API & Multi-Source)
+# 1. RICHIAMI ALIMENTARI (Estrazione diretta)
 # ==========================================
 
-def _fetch_from_opendata_api():
-    """Strategia 1: Interroga il catalogo OpenData ufficiale dei richiami alimentari."""
+def _estrai_richiami_realtime():
+    """Estrae l'elenco completo dei richiami alimentari ufficiali in Italia."""
     risultati = []
-    # Endpoint API OpenData / CKAN
-    url_api = "https://www.dati.gov.it/subsets/ministero-salute/richiami-alimentari/api/v1/richiami"
     
+    # 1. Scraping dal portale italiano aggregatore di richiami ufficiali
+    url_richiami = "https://richiamialimenti.it/"
     try:
-        resp = requests.get(url_api, headers=HEADERS, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            items = data.get("data", []) or data.get("result", []) or data
-            if isinstance(items, list):
-                for item in items:
-                    data_pub = item.get("data") or item.get("data_pubblicazione") or datetime.now().strftime("%d/%m/%Y")
-                    marca = item.get("marca") or item.get("osa") or "Richiamo Alimentare"
-                    titolo = item.get("prodotto") or item.get("denominazione") or item.get("titolo") or "Avviso di sicurezza"
-                    motivo = item.get("motivo") or item.get("motivo_richiamo") or "Rischio sanitario / microbiologico"
-                    link = item.get("link") or item.get("url") or "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
-
-                    risultati.append({
-                        "Data": data_pub,
-                        "Marca": marca,
-                        "Titolo": titolo,
-                        "Motivo": motivo,
-                        "Link": link
-                    })
-    except Exception:
-        pass
-    return risultati
-
-
-def _fetch_from_portal_aggregator():
-    """Strategia 2: Scrape dall'aggregatore nazionale completo per la sicurezza alimentare."""
-    risultati = []
-    url_mirror = "https://www.ilfattoalimentare.it/category/richiami"
-    
-    try:
-        resp = requests.get(url_mirror, headers=HEADERS, timeout=12)
+        resp = requests.get(url_richiami, headers=HEADERS, timeout=12)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, "html.parser")
-            articles = soup.find_all(["article", "div"], class_=re.compile(r"post|entry|article", re.I))
             
-            for art in articles:
-                link_tag = art.find("a", href=True)
-                if not link_tag:
-                    continue
+            # Trova tutti i link e gli articoli contenenti richiami
+            for a_tag in soup.find_all("a", href=True):
+                href = a_tag["href"]
+                testo = a_tag.get_text(strip=True)
                 
-                link = link_tag["href"]
-                titolo = link_tag.get_text(strip=True)
-                
-                # Cerca eventuale data
-                time_tag = art.find("time")
-                data_str = time_tag.get_text(strip=True) if time_tag else datetime.now().strftime("%d/%m/%Y")
-                
-                if len(titolo) > 12 and "richiamo" in titolo.lower() or "ritiro" in titolo.lower() or "salute" in titolo.lower():
-                    marca = "Richiamo Alimentare"
-                    if ":" in titolo:
-                        parti = titolo.split(":", 1)
-                        marca, titolo = parti[0].strip(), parti[1].strip()
-                    elif " - " in titolo:
-                        parti = titolo.split(" - ", 1)
-                        marca, titolo = parti[0].strip(), parti[1].strip()
+                # Se è una scheda di richiamo
+                if ("richiamo-" in href or "ritiro-" in href or "/avviso-" in href or "Richiamo" in testo) and len(testo) > 15:
+                    link_completo = href if href.startswith("http") else f"https://richiamialimenti.it{href.lstrip('/')}"
+                    
+                    # Estrazione Marca e Prodotto dal testo del link o titolo
+                    marca = "Ministero Salute / OSA"
+                    titolo = testo
+                    
+                    if "Marchio:" in testo:
+                        parti = testo.split("Marchio:", 1)
+                        titolo = parti[0].replace("Richiamo", "").strip()
+                        marca = parti[1].strip()
+                    elif ":" in testo:
+                        parti = testo.split(":", 1)
+                        marca = parti[0].strip()
+                        titolo = parti[1].strip()
+                    elif " - " in testo:
+                        parti = testo.split(" - ", 1)
+                        marca = parti[0].strip()
+                        titolo = parti[1].strip()
 
-                    if not any(r["Link"] == link for r in risultati):
+                    # Cerca eventuale data nel formato GG/MM/AAAA
+                    match_data = re.search(r"\b\d{2}/\d{2}/\d{4}\b", testo)
+                    data_str = match_data.group(0) if match_data else datetime.now().strftime("%d/%m/%Y")
+
+                    if not any(r["Link"] == link_completo for r in risultati):
                         risultati.append({
                             "Data": data_str,
                             "Marca": marca,
                             "Titolo": titolo,
-                            "Motivo": "Richiamo ufficiale per rischio sanitario / sicurezza alimentare",
-                            "Link": link
+                            "Motivo": "Rischio sanitario / Microbiologico / Allergeni",
+                            "Link": link_completo
                         })
     except Exception:
         pass
+
     return risultati
 
 
-@st.cache_data(ttl=1800, show_spinner="Caricamento richiami alimentari...")
+@st.cache_data(ttl=900, show_spinner="Caricamento tutti i richiami alimentari...")
 def fetch_data_alimentari():
-    # 1. Prova l'API OpenData
-    dati = _fetch_from_opendata_api()
-    if dati and len(dati) > 1:
-        return dati
-
-    # 2. Prova l'aggregatore nazionale in tempo reale
-    dati = _fetch_from_portal_aggregator()
-    if dati and len(dati) > 1:
-        return dati
-
-    # 3. Fallback di garanzia con collegamento diretto al Ministero
-    return [{
-        "Data": datetime.now().strftime("%d/%m/%Y"),
-        "Marca": "Ministero della Salute",
-        "Titolo": "Accedi al Portale del Ministero della Salute per la consultazione diretta",
-        "Motivo": "Consultazione diretta sul sito istituzionale",
-        "Link": "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
-    }]
+    dati = _estrai_richiami_realtime()
+    
+    # Se per qualche motivo lo scraping da 0 elementi, restituiamo un elenco informativo
+    if not dati:
+        return [{
+            "Data": datetime.now().strftime("%d/%m/%Y"),
+            "Marca": "Ministero della Salute",
+            "Titolo": "Sito Ufficiale Richiami Alimentari",
+            "Motivo": "Consultazione diretta delle schede di richiamo",
+            "Link": "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/"
+        }]
+    
+    return dati
 
 
 # ==========================================
@@ -140,7 +113,6 @@ URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 def estrai_avvisi_ferrovia():
     try:
         response = requests.get(URL_AVVISI, headers=HEADERS, timeout=10)
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         avvisi = []
@@ -169,7 +141,6 @@ def estrai_avvisi_ferrovia():
 def estrai_news_ferrovia():
     try:
         response = requests.get(URL_NEWS, headers=HEADERS, timeout=10)
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
         news = []
