@@ -21,100 +21,100 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
 }
+
+BASE_URL = "https://www.salute.gov.it"
 
 # ==========================================
 # 1. AVVISI ALIMENTARI (Ministero della Salute)
 # ==========================================
-BASE_URL = "https://www.salute.gov.it"
-RICHIAMI_PAGINATED_URL = "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari?pagina={}"
+URLS_RICHIAMI = [
+    "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari",
+    "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari?p=1",
+    "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
+]
 
-def _fetch_da_html(session, max_pagine=3):
-    """
-    Raccoglie i richiami alimentari navigando su più pagine ed entrando nei dettagli.
-    """
+def _fetch_da_html(session):
     risultati = []
     visti_link = set()
 
-    for pagina in range(1, max_pagine + 1):
-        url_pagina = RICHIAMI_PAGINATED_URL.format(pagina)
+    for url in URLS_RICHIAMI:
         try:
-            resp = session.get(url_pagina, timeout=12)
+            resp = session.get(url, timeout=12)
             if resp.status_code != 200:
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Seleziona solo i link che puntano a vere schede di richiamo
-            cards = soup.find_all("a", href=re.compile(r"/ext-avviso-sicurezza-alimentare/", re.I))
 
-            for card in cards:
-                link = card.get("href", "")
-                if not link.startswith("http"):
-                    link = BASE_URL + link
+            # Trova tutti i tag <a> che contengono un link a un avviso/richiamo
+            links = soup.find_all("a", href=True)
 
-                if link in visti_link:
-                    continue
-                visti_link.add(link)
+            for a_tag in links:
+                href = a_tag["href"].strip()
+                testo = a_tag.get_text(separator=" ", strip=True)
 
-                # Estrazione testo del blocco per estrarre informazioni chiave
-                testo_card = card.get_text(separator=" ", strip=True)
-                
-                # Ignora link generici o di navigazione del ministero
-                if "portale ufficiale" in testo_card.lower() or "consultazione diretta" in testo_card.lower():
+                # Filtra solo link pertinenti ed escludi sezioni generiche o di navigazione
+                if not any(k in href for k in ["ext-avviso-sicurezza-alimentare", "/avvisi/", "richiam"]):
                     continue
 
-                # Estrazione Data
-                match_data = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", testo_card)
-                data_str = match_data.group(1) if match_data else ""
-                
+                # Escludi voci generiche/sito web istituzionale
+                if any(x in testo.lower() for x in ["portale ufficiale", "consultazione diretta", "home", "cerca"]):
+                    continue
+
+                # Formatta l'URL completo
+                if href.startswith("/"):
+                    full_link = BASE_URL + href
+                elif href.startswith("http"):
+                    full_link = href
+                else:
+                    full_link = BASE_URL + "/" + href
+
+                if full_link in visti_link:
+                    continue
+                visti_link.add(full_link)
+
+                # Estrazione data
+                data_str = ""
                 dt_obj = datetime.min
-                if data_str:
+                match_data = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", testo)
+                if match_data:
+                    data_str = match_data.group(1)
                     try:
                         dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
                     except ValueError:
                         pass
 
-                # Pulizia Titolo e Marca
+                # Pulizia marca e titolo
                 marca = ""
-                titolo = testo_card
+                titolo = testo
 
-                # Prova ad estrarre marca e titolo basandoti sulla struttura HTML del blocco
-                marca_el = card.find(class_=re.compile(r"marca|brand|company", re.I))
-                titolo_el = card.find(class_=re.compile(r"title|titolo|denominazione", re.I))
+                if " - " in testo:
+                    parti = testo.split(" - ", 1)
+                    marca = parti[0].strip()
+                    titolo = parti[1].strip()
 
-                if marca_el:
-                    marca = marca_el.get_text(strip=True)
-                if titolo_el:
-                    titolo = titolo_el.get_text(strip=True)
-
-                if not marca and " - " in testo_card:
-                    parti = testo_card.split(" - ")
-                    if len(parti) >= 2:
-                        marca = parti[0].strip()
-                        titolo = " - ".join(parti[1:]).strip()
-
-                # Se non c'è una data visibile nella card, usa la data corrente di fallback
-                if not data_str and dt_obj == datetime.min:
-                    dt_obj = datetime.now()
-                    data_str = dt_obj.strftime("%d/%m/%Y")
+                if not marca:
+                    marca = "Ministero della Salute"
 
                 risultati.append({
-                    "Data": data_str,
+                    "Data": data_str or "N/D",
                     "dt_obj": dt_obj,
-                    "Marca": marca or "N/D",
-                    "Titolo": titolo or "Avviso di Sicurezza Alimentare",
+                    "Marca": marca,
+                    "Titolo": titolo,
                     "Motivo": "Richiamo per rischio sanitario / alimentare",
-                    "Link": link,
+                    "Link": full_link,
                 })
 
+            if risultati:
+                break
+
         except Exception as e:
-            logging.error(f"Errore nel recupero della pagina {pagina}: {e}")
+            logging.error(f"Errore durante lo scraping dell'URL {url}: {e}")
             continue
 
-    # Ordina i risultati per data decrescente (i più recenti prima)
+    # Ordina i risultati per data decrescente
     risultati.sort(key=lambda x: x["dt_obj"], reverse=True)
     return risultati
 
@@ -129,15 +129,15 @@ def fetch_data_alimentari():
     except Exception:
         pass
 
-    # Impostiamo max_pagine=5 per recuperare più record (es. 20-30 elementi)
-    return _fetch_da_html(session, max_pagine=5)
+    return _fetch_da_html(session)
 
 
 # ==========================================
-# 2. FERROTRAMVIARIA
+# 2. FERROTRAMVIARIA (Avvisi & News)
 # ==========================================
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
+
 
 @st.cache_data(ttl=900)
 def estrai_avvisi_ferrovia():
@@ -155,7 +155,7 @@ def estrai_avvisi_ferrovia():
                 titolo_raw = title_tag.get_text(strip=True)
                 if not link.startswith("http"):
                     link = "https://www.ferrotramviaria.it" + link
-                
+
                 titolo = re.sub(
                     r"(sciopero)",
                     r'<span style="color:red; font-weight:bold;">\1</span>',
@@ -166,6 +166,7 @@ def estrai_avvisi_ferrovia():
         return avvisi
     except Exception:
         return []
+
 
 @st.cache_data(ttl=900)
 def estrai_news_ferrovia():
@@ -245,7 +246,7 @@ with tab_alimentare:
                 | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
             ]
 
-        st.subheader(f"Richiami e Avvisi Sanitari ({len(df)})")
+        st.subheader(f"Richiami Registrati ({len(df)})")
 
         st.dataframe(
             df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
