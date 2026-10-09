@@ -41,12 +41,12 @@ URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
 # Parole chiave da monitorare per il popover / allerte
-KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro", "RACE FOR THE CURE"]
+KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro"]
 
 def contiene_parole_chiave(testo, parole_chiave):
     """Verifica se una stringa contiene una delle parole chiave indicate."""
-     pattern = r"\b(" + "|".join([re.escape(k) for k in parole_chiave]) + r")\b"
-     return bool(re.search(pattern, testo, flags=re.IGNORECASE))
+    pattern = r"\b(" + "|".join([re.escape(k) for k in parole_chiave]) + r")\b"
+    return bool(re.search(pattern, testo, flags=re.IGNORECASE))
 
 @st.cache_data(ttl=900)
 def estrai_avvisi_ferrovia():
