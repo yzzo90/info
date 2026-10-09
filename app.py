@@ -41,7 +41,7 @@ URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
 # Parole chiave da monitorare per il popover / allerte
-KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro", "RACE FOR THE CURE"]
+KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro"]
 
 def contiene_parole_chiave(testo, parole_chiave):
     """Verifica se una stringa contiene una qualsiasi delle parole chiave indicate."""
@@ -131,7 +131,7 @@ with tab_ferrovia:
     if elementi_sciopero:
         st.toast("⚠️ Trovati avvisi o news di particolare rilevanza!", icon="⚠️")
         
-        with st.popover("⚠️ ATTENZIONE: Avvisi Critici Rilevati!", use_container_width=True):
+        with st.popover("⚠️ ATTENZIONE: Avvisi sciopero!", use_container_width=True):
             st.warning(f"Sono stati rilevati **{len(elementi_sciopero)}** avvisi o news rilevanti:")
             for item in elementi_sciopero:
                 st.markdown(f"• [{item['titolo_raw']}]({item['link']})")
