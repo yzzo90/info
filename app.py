@@ -122,6 +122,14 @@ with tab_ferrovia:
 with tab_alimentare:
     app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
     
+    # Intestazione con Tasto Refresh affiancato
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.subheader("🥗 Richiami & Avvisi Alimentari")
+    with col_btn:
+        if st.button("🔄 Aggiorna", use_container_width=True):
+            st.rerun()
+
     # Recupera il contenuto HTML dall'app esterna
     res = fetch_url(app_url)
     
