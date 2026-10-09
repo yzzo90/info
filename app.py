@@ -122,7 +122,7 @@ with tab_ferrovia:
     # Pulsante di aggiornamento manuale dati Ferrotramviaria
     col_head, col_refresh_ft = st.columns([4, 1])
     with col_refresh_ft:
-        if st.button("🔄 Aggiorna", use_container_width=True):
+        if st.button("🔄 Aggiorna..", use_container_width=True):
             estrai_avvisi_ferrovia.clear()
             estrai_news_ferrovia.clear()
             st.rerun()
@@ -174,7 +174,7 @@ with tab_alimentare:
     
     col_title, col_btn = st.columns([4, 1])
     with col_btn:
-        if st.button("🔄 Aggiorna", use_container_width=True):
+        if st.button("🔄 Aggiorna.", use_container_width=True):
             st.rerun()
 
     res = fetch_url(app_url)
