@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ==========================================
 # 0. CONFIGURAZIONE PAGINA & LOGGING
@@ -18,7 +19,6 @@ st.set_page_config(
 
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 
-# Lista di User-Agent per mascherare le richieste
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
@@ -26,15 +26,9 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
 ]
 
-# Configura qui eventuali proxy HTTP/HTTPS (opzionale: es. "http://user:pass@ip:port")
 PROXIES_LIST = [
-    None,  # Connessione diretta senza proxy come primissimo tentativo
-    # Aggiungi qui i tuoi proxy se ne possiedi uno privato:
-    # "http://185.199.229.156:7492",
-    # "http://45.152.188.212:3128",
+    None,
 ]
-
-BASE_URL = "https://www.salute.gov.it"
 
 def get_random_headers():
     return {
@@ -58,86 +52,9 @@ def fetch_url_with_proxy(url):
             continue
     return None
 
-# ==========================================
-# 1. AVVISI ALIMENTARI (Ministero della Salute)
-# ==========================================
-URLS_RICHIAMI = [
-    "https://www.salute.gov.it/new/it/avvisi-e-richiami-di-prodotti-alimentari",
-    "https://www.salute.gov.it/new/it/avvisi/avvisi-e-richiami-di-prodotti-alimentari/",
-]
-
-def _fetch_da_html():
-    risultati = []
-    visti_link = set()
-
-    for url in URLS_RICHIAMI:
-        html_content = fetch_url_with_proxy(url)
-        if not html_content:
-            continue
-
-        soup = BeautifulSoup(html_content, "html.parser")
-        links = soup.find_all("a", href=True)
-
-        for a_tag in links:
-            href = a_tag["href"].strip()
-            testo = a_tag.get_text(separator=" ", strip=True)
-
-            if not any(k in href for k in ["ext-avviso-sicurezza-alimentare", "/avvisi/", "richiam"]):
-                continue
-
-            if any(x in testo.lower() for x in ["portale ufficiale", "consultazione diretta", "home", "cerca"]):
-                continue
-
-            full_link = href if href.startswith("http") else BASE_URL + (href if href.startswith("/") else "/" + href)
-
-            if full_link in visti_link:
-                continue
-            visti_link.add(full_link)
-
-            # Estrattore data
-            data_str = ""
-            dt_obj = datetime.min
-            match_data = re.search(r"\b(\d{2}/\d{2}/\d{4})\b", testo)
-            if match_data:
-                data_str = match_data.group(1)
-                try:
-                    dt_obj = datetime.strptime(data_str, "%d/%m/%Y")
-                except ValueError:
-                    pass
-
-            marca = ""
-            titolo = testo
-            if " - " in testo:
-                parti = testo.split(" - ", 1)
-                marca = parti[0].strip()
-                titolo = parti[1].strip()
-
-            if not marca:
-                marca = "Ministero della Salute"
-
-            risultati.append({
-                "Data": data_str or "N/D",
-                "dt_obj": dt_obj,
-                "Marca": marca,
-                "Titolo": titolo,
-                "Motivo": "Richiamo per rischio sanitario / alimentare",
-                "Link": full_link,
-            })
-
-        if risultati:
-            break
-
-    risultati.sort(key=lambda x: x["dt_obj"], reverse=True)
-    return risultati
-
-
-@st.cache_data(ttl=1800, show_spinner="Caricamento richiami alimentari con proxy/headers...")
-def fetch_data_alimentari():
-    return _fetch_da_html()
-
 
 # ==========================================
-# 2. FERROTRAMVIARIA (Avvisi & News)
+# 1. FERROTRAMVIARIA (Avvisi & News)
 # ==========================================
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
@@ -188,7 +105,7 @@ def estrai_news_ferrovia():
 
 
 # ==========================================
-# 3. INTERFACCIA STREAMLIT
+# 2. INTERFACCIA STREAMLIT
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
@@ -221,40 +138,15 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: RICHIAMI ALIMENTARI ---
+# --- TAB 2: RICHIAMI ALIMENTARI (Web App Esterna) ---
 with tab_alimentare:
-    col_btn, _ = st.columns([1, 4])
-    with col_btn:
-        if st.button("🔄 Ricarica Dati"):
-            st.cache_data.clear()
-            st.rerun()
-
-    dati_alim = fetch_data_alimentari()
-
-    if dati_alim:
-        df = pd.DataFrame(dati_alim)
-
-        search_query = st.text_input(
-            "🔍 Cerca nei richiami alimentari (es. marca, prodotto o motivo):", ""
-        )
-        if search_query:
-            df = df[
-                df["Marca"].str.contains(search_query, case=False, na=False, regex=False)
-                | df["Titolo"].str.contains(search_query, case=False, na=False, regex=False)
-                | df["Motivo"].str.contains(search_query, case=False, na=False, regex=False)
-            ]
-
-        st.subheader(f"Richiami Registrati ({len(df)})")
-
-        st.dataframe(
-            df[["Data", "Marca", "Titolo", "Motivo", "Link"]],
-            column_config={
-                "Link": st.column_config.LinkColumn("Scheda Ufficiale", display_text="Apri Scheda")
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.warning(
-            "Nessun dato alimentare disponibile al momento. Clicca su 'Ricarica Dati' per riprovare."
-        )
+    app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
+    
+    st.caption(f"🔗 [Apri la web app in una nuova scheda]({app_url})")
+    
+    # Visualizzazione embedded dell'applicazione Koyeb
+    components.iframe(
+        src=app_url,
+        height=800,
+        scrolling=True
+    )
