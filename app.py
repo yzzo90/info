@@ -40,6 +40,14 @@ def fetch_url(url):
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
+# Parole chiave da monitorare per il popover / allerte
+KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro", "RACE FOR THE CURE"]
+
+def contiene_parole_chiave(testo, parole_chiave):
+    """Verifica se una stringa contiene una delle parole chiave indicate."""
+     pattern = r"\b(" + "|".join([re.escape(k) for k in parole_chiave]) + r")\b"
+     return bool(re.search(pattern, testo, flags=re.IGNORECASE))
+
 @st.cache_data(ttl=900)
 def estrai_avvisi_ferrovia():
     resp = fetch_url(URL_AVVISI)
@@ -57,13 +65,21 @@ def estrai_avvisi_ferrovia():
             if not link.startswith("http"):
                 link = "https://www.ferrotramviaria.it" + link
 
-            titolo = re.sub(
-                r"(sciopero)",
+            # Evidenzia la parola "sciopero" o "agitazione sindacale" nel titolo
+            titolo_html = re.sub(
+                r"(sciopero|agitazione sindacale|agitazioni sindacali)",
                 r'<span style="color:red; font-weight:bold;">\1</span>',
                 titolo_raw,
                 flags=re.IGNORECASE,
             )
-            avvisi.append({"titolo": titolo, "link": link})
+            
+            is_sciopero = contiene_parole_chiave(titolo_raw, KEYWORDS_SCIOPERO)
+            avvisi.append({
+                "titolo_raw": titolo_raw, 
+                "titolo": titolo_html, 
+                "link": link,
+                "is_sciopero": is_sciopero
+            })
     return avvisi
 
 @st.cache_data(ttl=900)
@@ -81,7 +97,13 @@ def estrai_news_ferrovia():
         link = link_tag["href"] if link_tag else "#"
         if link.startswith("/"):
             link = "https://www.ferrotramviaria.it" + link
-        news.append({"titolo": title, "link": link})
+            
+        is_sciopero = contiene_parole_chiave(title, KEYWORDS_SCIOPERO)
+        news.append({
+            "titolo": title, 
+            "link": link,
+            "is_sciopero": is_sciopero
+        })
     return news
 
 # ==========================================
@@ -95,11 +117,28 @@ tab_ferrovia, tab_alimentare = st.tabs(
 
 # --- TAB 1: FERROTRAMVIARIA ---
 with tab_ferrovia:
+    avvisi_ft = estrai_avvisi_ferrovia()
+    news_ft = estrai_news_ferrovia()
+
+    # Raccoglie tutti gli elementi relativi a scioperi o agitazioni
+    elementi_sciopero = [
+        item for item in avvisi_ft + news_ft if item.get("is_sciopero")
+    ]
+
+    # SE PRESENTE UN AVVISO DI SCIOPERO: Mostra il Popover e un Toast informativo
+    if elementi_sciopero:
+        st.toast("⚠️ Trovati avvisi o news riguardanti scioperi o agitazioni sindacali!", icon="⚠️")
+        
+        with st.popover("⚠️ ATTENZIONE: Avvisi Sciopero Rilevati!", use_container_width=True):
+            st.warning(f"Sono stati rilevati **{len(elementi_sciopero)}** avvisi o news relativi a **sciopero / agitazione sindacale**:")
+            for item in elementi_sciopero:
+                titolo_pulito = item.get("titolo_raw", item["titolo"])
+                st.markdown(f"• [{titolo_pulito}]({item['link']})")
+
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("🔔 Avvisi di Servizio")
-        avvisi_ft = estrai_avvisi_ferrovia()
         if avvisi_ft:
             for idx, item in enumerate(avvisi_ft, 1):
                 st.markdown(
@@ -111,7 +150,6 @@ with tab_ferrovia:
 
     with col2:
         st.subheader("📰 Ultime News")
-        news_ft = estrai_news_ferrovia()
         if news_ft:
             for idx, item in enumerate(news_ft, 1):
                 st.markdown(f"{idx}. [{item['titolo']}]({item['link']})")
@@ -132,40 +170,29 @@ with tab_alimentare:
     res = fetch_url(app_url)
     
     if res and res.text:
-        # CSS per forzare il contrasto dei colori (testo bianco su sfondo scuro)
         custom_css = """
         <style>
-            /* Testo bianco visibile su tutto il frame */
             body, p, div, span, td, th, table {
                 color: #ffffff !important;
             }
-            /* Sfondo scuro per le celle della tabella */
             table, tr, td {
                 background-color: #121212 !important;
             }
-            /* Intestazione della tabella con sfondo chiaro e testo nero */
             th {
                 background-color: #e0e0e0 !important;
                 color: #000000 !important;
             }
-            /* Link ben visibili in azzurro chiaro */
             a {
                 color: #4da6ff !important;
                 font-weight: bold !important;
             }
-            /* Input di ricerca */
             input, select, textarea {
                 color: #000000 !important;
                 background-color: #ffffff !important;
             }
         </style>
         """
-        
-        # Inietta il CSS prima del codice HTML dell'app
         html_modificato = custom_css + res.text
-        
-        # Rendering dell'HTML modificato
         components.html(html_modificato, height=800, scrolling=True)
     else:
-        # Fallback iframe se non si riesce a leggere il sorgente
         components.iframe(src=app_url, height=800, scrolling=True)
