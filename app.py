@@ -124,8 +124,6 @@ with tab_alimentare:
     
     # Intestazione con Tasto Refresh affiancato
     col_title, col_btn = st.columns([4, 1])
-    with col_title:
-        st.subheader("🥗 Richiami & Avvisi Alimentari")
     with col_btn:
         if st.button("🔄 Aggiorna", use_container_width=True):
             st.rerun()
