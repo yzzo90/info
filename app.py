@@ -41,7 +41,7 @@ URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
 # Parole chiave da monitorare per il popover / allerte
-KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro"]
+KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro", "abcd"]
 
 def contiene_parole_chiave(testo, parole_chiave):
     """Verifica se una stringa contiene una qualsiasi delle parole chiave indicate."""
