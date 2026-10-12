@@ -331,7 +331,7 @@ with tab_alimentare:
     
     col_title, col_btn = st.columns([4, 1])
     with col_btn:
-        if st.button("🥗 Aggiorna", use_context=True):
+        if st.button("🥗 Aggiorna", use_container_width=True):
             st.rerun()
 
     res = fetch_url(app_url)
