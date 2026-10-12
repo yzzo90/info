@@ -240,7 +240,7 @@ def format_realtime_table(json_data, titolo_sezione):
 # ==========================================
 # 3. INTERFACCIA STREAMLIT
 # ==========================================
-st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
+st.title("📌 Dashboard")
 
 tab_ferrovia, tab_realtime, tab_tracking, tab_alimentare = st.tabs(
     ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "📦 Tracking Pacchi", "🥗 Avvisi Alimentari"]
