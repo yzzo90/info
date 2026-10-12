@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 # 0. CONFIGURAZIONE PAGINA & LOGGING
 # ==========================================
 st.set_page_config(
-    page_title="Dashboard", 
+    page_title="Dashboard Avvisi & News", 
     page_icon="📢", 
     layout="wide"
 )
@@ -242,7 +242,7 @@ def format_realtime_table(json_data, titolo_sezione):
 # ==========================================
 st.title("📌 Dashboard")
 
-tab_ferrovia, tab_realtime, tab_tracking, tab_alimentare = st.tabs(
+tab_ferrovia, tab_realtime, tab_alimentare, tab_tracking = st.tabs(
     ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi"]
 )
 
@@ -325,12 +325,50 @@ with tab_realtime:
 
     render_realtime_board()
 
-# --- TAB 3: TRACKING PACCHI (PRIVATO NEL BROWSER) ---
+# --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
+with tab_alimentare:
+    app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
+    
+    col_title, col_btn = st.columns([4, 1])
+    with col_btn:
+        if st.button("🥗 Aggiorna", use_container_width=True):
+            st.rerun()
+
+    res = fetch_url(app_url)
+    
+    if res and res.text:
+        custom_css = """
+        <style>
+            body, p, div, span, td, th, table {
+                color: #ffffff !important;
+            }
+            table, tr, td {
+                background-color: #121212 !important;
+            }
+            th {
+                background-color: #e0e0e0 !important;
+                color: #000000 !important;
+            }
+            a {
+                color: #4da6ff !important;
+                font-weight: bold !important;
+            }
+            input, select, textarea {
+                color: #000000 !important;
+                background-color: #ffffff !important;
+            }
+        </style>
+        """
+        html_modificato = custom_css + res.text
+        components.html(html_modificato, height=800, scrolling=True)
+    else:
+        components.iframe(src=app_url, height=800, scrolling=True)
+
+# --- TAB 4: TRACKING PACCHI (PRIVATO NEL BROWSER) ---
 with tab_tracking:
     st.subheader("📦 Gestione Tracking Spedizioni Privato")
-    st.markdown("I dati inseriti qui vengono salvati **esclusivamente nella memoria locale del tuo browser** (`localStorage`) e non vengono condivisi o salvati su alcun server.")
+    st.markdown("I dati inseriti qui vengono salvati **esclusivamente nella memoria locale della sessione** e non vengono condivisi o salvati su alcun server.")
 
-    # Inizializzazione dello state in memoria di sessione se non esiste
     if "tracking_list" not in st.session_state:
         st.session_state["tracking_list"] = []
 
@@ -372,42 +410,3 @@ with tab_tracking:
                     st.rerun()
     else:
         st.info("Nessuna spedizione salvata al momento.")
-
-# --- TAB 4: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
-with tab_alimentare:
-    app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
-    
-    col_title, col_btn = st.columns([4, 1])
-    with col_btn:
-        if st.button("🥗 Aggiorna", use_container_width=True):
-            st.rerun()
-
-    res = fetch_url(app_url)
-    
-    if res and res.text:
-        custom_css = """
-        <style>
-            body, p, div, span, td, th, table {
-                color: #ffffff !important;
-            }
-            table, tr, td {
-                background-color: #121212 !important;
-            }
-            th {
-                background-color: #e0e0e0 !important;
-                color: #000000 !important;
-            }
-            a {
-                color: #4da6ff !important;
-                font-weight: bold !important;
-            }
-            input, select, textarea {
-                color: #000000 !important;
-                background-color: #ffffff !important;
-            }
-        </style>
-        """
-        html_modificato = custom_css + res.text
-        components.html(html_modificato, height=800, scrolling=True)
-    else:
-        components.iframe(src=app_url, height=800, scrolling=True)
