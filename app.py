@@ -152,25 +152,19 @@ def format_realtime_table(json_data, titolo_sezione):
         with tab_p:
             if partenze:
                 df_p = pd.DataFrame(partenze)
+                col_partenza = next((c for c in df_p.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df_p.columns[0])
                 
-                # 1. Ordinamento eseguito SUI DATI ORIGINALI (dalle più recenti / discendente)
-                sort_cols = [c for c in df_p.columns if any(k in c.lower() for k in ['ora', 'data', 'time', 'date', 'sched', 'part'])]
-                if sort_cols:
-                    df_p = df_p.sort_values(by=sort_cols[0], ascending=False)
-                else:
-                    df_p = df_p.sort_values(by=df_p.columns[0], ascending=False)
+                df_p['_sort_dt'] = pd.to_datetime(df_p[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
+                df_p = df_p.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                 
-                # 2. Formattazione delle date in modo leggibile DOPO il sort
                 df_p = process_dataframe(df_p)
                 st.dataframe(df_p, use_container_width=True)
             else:
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
-                    sort_cols = [c for c in df.columns if any(k in c.lower() for k in ['ora', 'data', 'time', 'date', 'sched', 'part'])]
-                    if sort_cols:
-                        df = df.sort_values(by=sort_cols[0], ascending=False)
-                    else:
-                        df = df.sort_values(by=df.columns[0], ascending=False)
+                    col_partenza = next((c for c in df.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df.columns[0])
+                    df['_sort_dt'] = pd.to_datetime(df[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
+                    df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                     df = process_dataframe(df)
                     st.dataframe(df, use_container_width=True)
                 else:
@@ -179,12 +173,15 @@ def format_realtime_table(json_data, titolo_sezione):
         with tab_a:
             if arrivi:
                 df_a = pd.DataFrame(arrivi)
+                col_arrivo = next((c for c in df_a.columns if any(k in c.lower() for k in ['arrivo', 'ora', 'data', 'time', 'sched'])), df_a.columns[0])
+                df_a['_sort_dt'] = pd.to_datetime(df_a[col_arrivo].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
+                df_a = df_a.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                 df_a = process_dataframe(df_a)
                 st.dataframe(df_a, use_container_width=True)
             else:
                 st.info("Nessun dato sugli arrivi disponibile.")
     except Exception as e:
-        st.warning(f"Impossibile formattare i dati tabulari automaticamente. Ecco i dati grezzi:")
+        st.warning("Impossibile formattare i dati tabulari automaticamente. Ecco i dati grezzi:")
         st.json(json_data)
 
 # ==========================================
@@ -244,7 +241,7 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: REALTIME TRENI (CON AGGIORNAMENTO AUTOMATICO OGNI 1 MINUTO) ---
+# --- TAB 2: REALTIME TRENI ---
 with tab_realtime:
     col_rt_head, col_rt_btn = st.columns([4, 1])
     with col_rt_btn:
