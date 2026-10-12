@@ -172,7 +172,7 @@ with tab_ferrovia:
 with tab_realtime:
     st.subheader("🕒 Tabellone Realtime Treni")
     components.iframe(
-        "https://eticket.ferrovienordbarese.it/b2c/web/index.jsp", 
+        "https://eticket.ferrovienordbarese.it/b2c/web/index.jsp#RT", 
         height=800, 
         scrolling=True
     )
