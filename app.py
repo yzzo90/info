@@ -134,10 +134,8 @@ def process_dataframe(df):
     """Applica la formattazione leggibile e pulisce i ritardi."""
     if df is not None and not df.empty:
         for col in df.columns:
-            # Formattazione date/ore a 14 cifre
             df[col] = df[col].apply(format_datetime_value)
             
-            # Pulizia specifica per la colonna ritardo
             if 'ritardo' in col.lower():
                 def clean_delay(val):
                     if val is None or str(val).lower() == 'none' or pd.isna(val):
@@ -313,7 +311,8 @@ with tab_realtime:
     
     stazione_scelta = st.selectbox(
         "Seleziona Stazione", 
-        options=["Stazione Europa (S01136)", "Stazione Ruvo (S01160)"],
+        options=["Stazione Ruvo (S01160)", "Stazione Europa (S01136)"],
+        index=0,
         key="stazione_selezionata"
     )
 
@@ -321,12 +320,13 @@ with tab_realtime:
     def render_realtime_board():
         st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
         
-        if "Europa" in st.session_state.get("stazione_selezionata", ""):
-            data_json = fetch_realtime_data("S01136")
-            format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Europa")
-        else:
+        selected = st.session_state.get("stazione_selezionata", "")
+        if "Ruvo" in selected:
             data_json = fetch_realtime_data("S01160")
             format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Ruvo")
+        else:
+            data_json = fetch_realtime_data("S01136")
+            format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Europa")
 
     render_realtime_board()
 
