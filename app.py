@@ -138,13 +138,12 @@ def process_dataframe(df):
     return df
 
 def reorder_columns(df):
-    """Riordina le colonne: NomeDestinazione, partenza, ritardo, soppressa, poi binarioEffettivo prima di numero, e il resto."""
+    """Riordina le colonne: NomeDestinazione, partenza, ritardo, soppressa, binarioEffettivo prima di numero, e il resto."""
     if df is None or df.empty:
         return df
     
     cols_lower = {c.lower(): c for c in df.columns}
     
-    # Colonne iniziali richieste
     initial_targets = ['nomedestinazione', 'partenza', 'ritardo', 'soppressa']
     ordered = []
     
@@ -152,11 +151,9 @@ def reorder_columns(df):
         if t in cols_lower:
             ordered.append(cols_lower[t])
             
-    # Cerchiamo le colonne binarioEffettivo e numero
     binario_col = next((cols_lower[c] for c in cols_lower if 'binario' in c and 'effettivo' in c), None)
     numero_col = next((cols_lower[c] for c in cols_lower if c == 'numero'), None)
     
-    # Aggiungiamo tutte le colonne intermedie non ancora inserite
     remaining = [c for c in df.columns if c not in ordered and c != binario_col]
     
     if binario_col and numero_col and numero_col in remaining:
@@ -167,6 +164,15 @@ def reorder_columns(df):
         
     final_cols = ordered + [c for c in remaining if c not in ordered]
     return df[[c for c in final_cols if c in df.columns]]
+
+def highlight_soppressa(row):
+    """Evidenzia in rosso la riga se la colonna soppressa è diversa da 'N'."""
+    cols_lower = [c.lower() for c in row.index]
+    if 'soppressa' in cols_lower:
+        val = str(row.iloc[cols_lower.index('soppressa')]).strip().upper()
+        if val and val != 'N' and val != 'FALSE':
+            return ['background-color: rgba(255, 0, 0, 0.3)'] * len(row)
+    return [''] * len(row)
 
 def format_realtime_table(json_data, titolo_sezione):
     st.subheader(titolo_sezione)
@@ -186,12 +192,14 @@ def format_realtime_table(json_data, titolo_sezione):
                 col_partenza = next((c for c in df_p.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df_p.columns[0])
                 
                 df_p['_sort_dt'] = pd.to_datetime(df_p[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                # Ordinamento CRESCENTE (ascending=True) per mostrare i treni più vicini/recenti in alto
                 df_p = df_p.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                 
                 df_p = process_dataframe(df_p)
                 df_p = reorder_columns(df_p)
-                st.dataframe(df_p, use_container_width=True)
+                
+                # Applicazione dello stile rosso per i treni soppressi
+                styled_df_p = df_p.style.apply(highlight_soppressa, axis=1)
+                st.dataframe(styled_df_p, use_container_width=True)
             else:
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
@@ -200,7 +208,8 @@ def format_realtime_table(json_data, titolo_sezione):
                     df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                     df = process_dataframe(df)
                     df = reorder_columns(df)
-                    st.dataframe(df, use_container_width=True)
+                    styled_df = df.style.apply(highlight_soppressa, axis=1)
+                    st.dataframe(styled_df, use_container_width=True)
                 else:
                     st.write(json_data)
 
@@ -212,7 +221,8 @@ def format_realtime_table(json_data, titolo_sezione):
                 df_a = df_a.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
                 df_a = process_dataframe(df_a)
                 df_a = reorder_columns(df_a)
-                st.dataframe(df_a, use_container_width=True)
+                styled_df_a = df_a.style.apply(highlight_soppressa, axis=1)
+                st.dataframe(styled_df_a, use_container_width=True)
             else:
                 st.info("Nessun dato sugli arrivi disponibile.")
     except Exception as e:
