@@ -108,7 +108,7 @@ def estrai_news_ferrovia():
 # ==========================================
 # 2. FUNZIONE PER DATI REALTIME JSON
 # ==========================================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=30)
 def fetch_realtime_data(cod_sito):
     url = f"https://eticket.ferrovienordbarese.it/b2c/json/realtime/dati?codSito={cod_sito}&type=T"
     try:
@@ -125,10 +125,7 @@ def format_realtime_table(json_data, titolo_sezione):
         st.info("Nessun dato disponibile o errore di connessione al server.")
         return
 
-    # Gestione in base alla struttura del JSON restituito dall'endpoint
-    # Di solito contiene liste per partenze e/o arrivi
     try:
-        # Esempio generico di parsing se i dati sono dizionari/liste
         partenze = json_data.get("partenze", json_data.get("prospettoPartenze", []))
         arrivi = json_data.get("arrivi", json_data.get("prospettoArrivi", []))
 
@@ -139,7 +136,6 @@ def format_realtime_table(json_data, titolo_sezione):
                 df_p = pd.DataFrame(partenze)
                 st.dataframe(df_p, use_container_width=True)
             else:
-                # Se la struttura è diversa, proviamo a mostrare il JSON grezzo formattato o la lista diretta
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
                     st.dataframe(df, use_container_width=True)
@@ -213,15 +209,25 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: REALTIME TRENI (API JSON) ---
+# --- TAB 2: REALTIME TRENI (API JSON CON AUTO-REFRESH) ---
 with tab_realtime:
+    # Script JavaScript per ricaricare la pagina automaticamente ogni 60 secondi (60000 ms)
+    auto_refresh_script = """
+    <script>
+        setTimeout(function(){
+            window.location.reload();
+        }, 60000);
+    </script>
+    """
+    components.html(auto_refresh_script, height=0, width=0)
+
     col_rt_head, col_rt_btn = st.columns([4, 1])
     with col_rt_btn:
         if st.button("🔄 Aggiorna Treni", use_container_width=True):
             fetch_realtime_data.clear()
             st.rerun()
 
-    st.markdown("### Tabellone in Tempo Reale")
+    st.markdown("### Tabellone in Tempo Reale (Aggiornamento automatico ogni 1 min)")
     
     stazione_scelta = st.selectbox(
         "Seleziona Stazione", 
