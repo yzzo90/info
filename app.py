@@ -7,6 +7,8 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ==========================================
 # 0. CONFIGURAZIONE PAGINA & LOGGING
@@ -313,7 +315,9 @@ with tab_realtime:
 
     @st.fragment(run_every=60)
     def render_realtime_board():
-        st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
+        #st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
+        ora_italiana = datetime.now(ZoneInfo("Europe/Rome")).strftime("%H:%M:%S")
+        st.caption(f"Ultimo aggiornamento automatico: {ora_italiana}")
         
         selected = st.session_state.get("stazione_selezionata", "")
         if "Ruvo" in selected:
