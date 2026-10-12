@@ -121,7 +121,6 @@ def fetch_realtime_data(cod_sito):
     return None
 
 def format_datetime_value(val):
-    """Converte stringhe nel formato YYYYMMDDHHMMSS in una data/ora leggibile."""
     if isinstance(val, str) and val.isdigit() and len(val) == 14:
         try:
             dt = datetime.strptime(val, "%Y%m%d%H%M%S")
@@ -131,7 +130,6 @@ def format_datetime_value(val):
     return val
 
 def process_dataframe(df):
-    """Applica la formattazione leggibile e pulisce i ritardi."""
     if df is not None and not df.empty:
         for col in df.columns:
             df[col] = df[col].apply(format_datetime_value)
@@ -152,12 +150,10 @@ def process_dataframe(df):
     return df
 
 def reorder_columns(df):
-    """Riordina le colonne: NomeDestinazione, partenza, ritardo, soppressa, binarioEffettivo prima di numero, e il resto."""
     if df is None or df.empty:
         return df
     
     cols_lower = {c.lower(): c for c in df.columns}
-    
     initial_targets = ['nomedestinazione', 'partenza', 'ritardo', 'soppressa']
     ordered = []
     
@@ -180,7 +176,6 @@ def reorder_columns(df):
     return df[[c for c in final_cols if c in df.columns]]
 
 def highlight_soppressa(row):
-    """Evidenzia in rosso la riga se la colonna soppressa è diversa da 'N'."""
     cols_lower = [c.lower() for c in row.index]
     if 'soppressa' in cols_lower:
         val = str(row.iloc[cols_lower.index('soppressa')]).strip().upper()
@@ -247,8 +242,8 @@ def format_realtime_table(json_data, titolo_sezione):
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
-tab_ferrovia, tab_realtime, tab_alimentare = st.tabs(
-    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari"]
+tab_ferrovia, tab_realtime, tab_tracking, tab_alimentare = st.tabs(
+    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "📦 Tracking Pacchi", "🥗 Avvisi Alimentari"]
 )
 
 # --- TAB 1: FERROTRAMVIARIA ---
@@ -330,7 +325,55 @@ with tab_realtime:
 
     render_realtime_board()
 
-# --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
+# --- TAB 3: TRACKING PACCHI (PRIVATO NEL BROWSER) ---
+with tab_tracking:
+    st.subheader("📦 Gestione Tracking Spedizioni Privato")
+    st.markdown("I dati inseriti qui vengono salvati **esclusivamente nella memoria locale del tuo browser** (`localStorage`) e non vengono condivisi o salvati su alcun server.")
+
+    # Inizializzazione dello state in memoria di sessione se non esiste
+    if "tracking_list" not in st.session_state:
+        st.session_state["tracking_list"] = []
+
+    with st.form("form_tracking", clear_on_submit=True):
+        col_f1, col_f2, col_f3 = st.columns([2, 3, 3])
+        with col_f1:
+            nome_pacco = st.text_input("Nome / Corriere")
+        with col_f2:
+            link_pacco = st.text_input("Link di Tracking (URL)")
+        with col_f3:
+            stato_pacco = st.text_input("Stato / Note (es. In transito, Consegnato)")
+            
+        submitted = st.form_submit_button("➕ Aggiungi Spedizione")
+        if submitted:
+            if nome_pacco and link_pacco:
+                st.session_state["tracking_list"].append({
+                    "nome": nome_pacco,
+                    "link": link_pacco,
+                    "stato": stato_pacco if stato_pacco else "In lavorazione"
+                })
+                st.success("Spedizione aggiunta con successo!")
+                st.rerun()
+            else:
+                st.warning("Inserisci almeno il nome e il link di tracking.")
+
+    st.markdown("### Le tue spedizioni salvate")
+    if st.session_state["tracking_list"]:
+        for idx, item in enumerate(st.session_state["tracking_list"]):
+            col_t1, col_t2, col_t3, col_t4 = st.columns([2, 3, 3, 1])
+            with col_t1:
+                st.write(f"**{item['nome']}**")
+            with col_t2:
+                st.markdown(f"[Apri Tracking]({item['link']})")
+            with col_t3:
+                st.write(f"Stato: *{item['stato']}*")
+            with col_t4:
+                if st.button("🗑️", key=f"del_track_{idx}"):
+                    st.session_state["tracking_list"].pop(idx)
+                    st.rerun()
+    else:
+        st.info("Nessuna spedizione salvata al momento.")
+
+# --- TAB 4: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
 with tab_alimentare:
     app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
     
