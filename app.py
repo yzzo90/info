@@ -240,7 +240,7 @@ def format_realtime_table(json_data, titolo_sezione):
 # ==========================================
 # 3. INTERFACCIA STREAMLIT
 # ==========================================
-st.title("📌 Dashboard")
+st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
 tab_ferrovia, tab_realtime, tab_alimentare, tab_tracking = st.tabs(
     ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi"]
@@ -331,7 +331,7 @@ with tab_alimentare:
     
     col_title, col_btn = st.columns([4, 1])
     with col_btn:
-        if st.button("🥗 Aggiorna", use_container_width=True):
+        if st.button("🥗 Aggiorna", use_context=True):
             st.rerun()
 
     res = fetch_url(app_url)
@@ -364,49 +364,75 @@ with tab_alimentare:
     else:
         components.iframe(src=app_url, height=800, scrolling=True)
 
-# --- TAB 4: TRACKING PACCHI (PRIVATO NEL BROWSER) ---
+# --- TAB 4: TRACKING PACCHI (LOCALSTORAGE PERSISTENTE) ---
 with tab_tracking:
-    st.subheader("📦 Gestione Tracking Spedizioni Privato")
-    st.markdown("I dati inseriti qui vengono salvati **esclusivamente nella memoria locale della sessione** e non vengono condivisi o salvati su alcun server.")
+    st.subheader("📦 Gestione Tracking Spedizioni (Persistente in Locale)")
+    st.markdown("I dati inseriti qui vengono salvati direttamente nel **`localStorage` del tuo browser**: resistono ai refresh e alla chiusura della pagina, rimanendo perfettamente privati sul tuo dispositivo.")
 
-    if "tracking_list" not in st.session_state:
-        st.session_state["tracking_list"] = []
+    tracking_html = """
+    <div style="font-family: sans-serif; color: #white; padding: 5px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap;">
+            <input type="text" id="paccoName" placeholder="Nome / Corriere" style="padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; flex: 1; min-width: 150px;">
+            <input type="text" id="paccoLink" placeholder="Link di Tracking (URL)" style="padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; flex: 2; min-width: 200px;">
+            <input type="text" id="paccoStato" placeholder="Stato (es. In transito)" style="padding: 8px; border-radius: 4px; border: 1px solid #444; background: #222; color: white; flex: 1; min-width: 150px;">
+            <button onclick="addPacco()" style="padding: 8px 15px; background: #ff4b4b; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer;">➕ Aggiungi</button>
+        </div>
+        <div id="paccoList"></div>
+    </div>
 
-    with st.form("form_tracking", clear_on_submit=True):
-        col_f1, col_f2, col_f3 = st.columns([2, 3, 3])
-        with col_f1:
-            nome_pacco = st.text_input("Nome / Corriere")
-        with col_f2:
-            link_pacco = st.text_input("Link di Tracking (URL)")
-        with col_f3:
-            stato_pacco = st.text_input("Stato / Note (es. In transito, Consegnato)")
+    <script>
+        function getPacchi() {
+            try {
+                return JSON.parse(localStorage.getItem('miei_pacchi_privati') || '[]');
+            } catch(e) {
+                return [];
+            }
+        }
+        function savePacchi(pacchi) {
+            localStorage.setItem('miei_pacchi_privati', JSON.stringify(pacchi));
+            renderPacchi();
+        }
+        function addPacco() {
+            let name = document.getElementById('paccoName').value.trim();
+            let link = document.getElementById('paccoLink').value.trim();
+            let stato = document.getElementById('paccoStato').value.trim() || 'In lavorazione';
+            if(!name || !link) {
+                alert('Inserisci almeno il nome e il link di tracking!');
+                return;
+            }
+            let pacchi = getPacchi();
+            pacchi.push({name, link, stato});
+            savePacchi(pacchi);
+            document.getElementById('paccoName').value = '';
+            document.getElementById('paccoLink').value = '';
+            document.getElementById('paccoStato').value = '';
+        }
+        function deletePacco(index) {
+            let pacchi = getPacchi();
+            pacchi.splice(index, 1);
+            savePacchi(pacchi);
+        }
+        function renderPacchi() {
+            let pacchi = getPacchi();
+            let html = '<table style="width:100%; border-collapse: collapse; margin-top: 10px; color: white; background-color: #121212;">';
+            html += '<tr style="background-color: #262730;"><th style="border:1px solid #444; padding:10px; text-align:left;">Corriere / Nome</th><th style="border:1px solid #444; padding:10px; text-align:left;">Link Tracking</th><th style="border:1px solid #444; padding:10px; text-align:left;">Stato</th><th style="border:1px solid #444; padding:10px; text-align:center;">Azioni</th></tr>';
             
-        submitted = st.form_submit_button("➕ Aggiungi Spedizione")
-        if submitted:
-            if nome_pacco and link_pacco:
-                st.session_state["tracking_list"].append({
-                    "nome": nome_pacco,
-                    "link": link_pacco,
-                    "stato": stato_pacco if stato_pacco else "In lavorazione"
-                })
-                st.success("Spedizione aggiunta con successo!")
-                st.rerun()
-            else:
-                st.warning("Inserisci almeno il nome e il link di tracking.")
-
-    st.markdown("### Le tue spedizioni salvate")
-    if st.session_state["tracking_list"]:
-        for idx, item in enumerate(st.session_state["tracking_list"]):
-            col_t1, col_t2, col_t3, col_t4 = st.columns([2, 3, 3, 1])
-            with col_t1:
-                st.write(f"**{item['nome']}**")
-            with col_t2:
-                st.markdown(f"[Apri Tracking]({item['link']})")
-            with col_t3:
-                st.write(f"Stato: *{item['stato']}*")
-            with col_t4:
-                if st.button("🗑️", key=f"del_track_{idx}"):
-                    st.session_state["tracking_list"].pop(idx)
-                    st.rerun()
-    else:
-        st.info("Nessuna spedizione salvata al momento.")
+            if(pacchi.length === 0) {
+                html += '<tr><td colspan="4" style="padding: 15px; text-align: center; color: #888;">Nessuna spedizione salvata nel browser.</td></tr>';
+            } else {
+                pacchi.forEach((p, i) => {
+                    html += `<tr>` +
+                        `<td style="border:1px solid #444; padding:10px;"><b>${p.name}</b></td>` +
+                        `<td style="border:1px solid #444; padding:10px;"><a href="${p.link}" target="_blank" style="color: #4da6ff; text-decoration: underline;">Apri Tracking ↗</a></td>` +
+                        `<td style="border:1px solid #444; padding:10px;"><i>${p.stato}</i></td>` +
+                        `<td style="border:1px solid #444; padding:10px; text-align:center;"><button onclick="deletePacco(${i})" style="background: transparent; border: none; cursor: pointer; font-size: 16px;" title="Elimina">🗑️</button></td>` +
+                        `</tr>`;
+                });
+            }
+            html += '</table>';
+            document.getElementById('paccoList').innerHTML = html;
+        }
+        renderPacchi();
+    </script>
+    """
+    components.html(tracking_html, height=400, scrolling=True)
