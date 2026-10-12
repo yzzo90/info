@@ -137,6 +137,27 @@ def process_dataframe(df):
             df[col] = df[col].apply(format_datetime_value)
     return df
 
+def reorder_columns(df):
+    """Riordina le colonne secondo la richiesta: NomeDestinazione, partenza, ritardo, soppressa + il resto."""
+    if df is None or df.empty:
+        return df
+    
+    # Cerchiamo i nomi reali delle colonne che corrispondono (anche case-insensitive)
+    cols_lower = {c.lower(): c for c in df.columns}
+    
+    target_cols = ['nomedestinazione', 'partenza', 'ritardo', 'soppressa']
+    ordered = []
+    
+    for t in target_cols:
+        if t in cols_lower:
+            ordered.append(cols_lower[t])
+            
+    # Aggiunge tutte le altre colonne non ancora inserite
+    remaining = [c for c in df.columns if c not in ordered]
+    final_cols = ordered + remaining
+    
+    return df[final_cols]
+
 def format_realtime_table(json_data, titolo_sezione):
     st.subheader(titolo_sezione)
     if not json_data:
@@ -155,17 +176,20 @@ def format_realtime_table(json_data, titolo_sezione):
                 col_partenza = next((c for c in df_p.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df_p.columns[0])
                 
                 df_p['_sort_dt'] = pd.to_datetime(df_p[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                df_p = df_p.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
+                # Per avere i treni più vicini/recenti in cima usiamo ascending=False (o True in base all'esigenza, verifichiamo la sequenza)
+                df_p = df_p.sort_values(by='_sort_dt', ascending=False).drop(columns=['_sort_dt'])
                 
                 df_p = process_dataframe(df_p)
+                df_p = reorder_columns(df_p)
                 st.dataframe(df_p, use_container_width=True)
             else:
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
                     col_partenza = next((c for c in df.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df.columns[0])
                     df['_sort_dt'] = pd.to_datetime(df[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                    df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
+                    df = df.sort_values(by='_sort_dt', ascending=False).drop(columns=['_sort_dt'])
                     df = process_dataframe(df)
+                    df = reorder_columns(df)
                     st.dataframe(df, use_container_width=True)
                 else:
                     st.write(json_data)
@@ -175,8 +199,9 @@ def format_realtime_table(json_data, titolo_sezione):
                 df_a = pd.DataFrame(arrivi)
                 col_arrivo = next((c for c in df_a.columns if any(k in c.lower() for k in ['arrivo', 'ora', 'data', 'time', 'sched'])), df_a.columns[0])
                 df_a['_sort_dt'] = pd.to_datetime(df_a[col_arrivo].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                df_a = df_a.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
+                df_a = df_a.sort_values(by='_sort_dt', ascending=False).drop(columns=['_sort_dt'])
                 df_a = process_dataframe(df_a)
+                df_a = reorder_columns(df_a)
                 st.dataframe(df_a, use_container_width=True)
             else:
                 st.info("Nessun dato sugli arrivi disponibile.")
