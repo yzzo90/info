@@ -241,36 +241,35 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: REALTIME TRENI (API JSON CON AUTO-REFRESH & ORDINAMENTO) ---
+# --- TAB 2: REALTIME TRENI (CON AGGIORNAMENTO AUTOMATICO OGNI 1 MINUTO) ---
 with tab_realtime:
-    auto_refresh_script = """
-    <script>
-        setTimeout(function(){
-            window.location.reload();
-        }, 60000);
-    </script>
-    """
-    components.html(auto_refresh_script, height=0, width=0)
-
     col_rt_head, col_rt_btn = st.columns([4, 1])
     with col_rt_btn:
         if st.button("🔄 Aggiorna Treni", use_container_width=True):
             fetch_realtime_data.clear()
             st.rerun()
 
-    st.markdown("### Tabellone in Tempo Reale (Aggiornamento automatico ogni 1 min)")
+    st.markdown("### Tabellone in Tempo Reale")
     
     stazione_scelta = st.selectbox(
         "Seleziona Stazione", 
-        options=["Stazione Europa (S01136)", "Stazione Ruvo (S01160)"]
+        options=["Stazione Europa (S01136)", "Stazione Ruvo (S01160)"],
+        key="stazione_selezionata"
     )
 
-    if "Europa" in stazione_scelta:
-        data_json = fetch_realtime_data("S01136")
-        format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Europa")
-    else:
-        data_json = fetch_realtime_data("S01160")
-        format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Ruvo")
+    # Definizione del frammento con aggiornamento automatico ogni 60 secondi
+    @st.fragment(run_every=60)
+    def render_realtime_board():
+        st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
+        
+        if "Europa" in st.session_state.get("stazione_selezionata", ""):
+            data_json = fetch_realtime_data("S01136")
+            format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Europa")
+        else:
+            data_json = fetch_realtime_data("S01160")
+            format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Ruvo")
+
+    render_realtime_board()
 
 # --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
 with tab_alimentare:
