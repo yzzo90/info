@@ -152,23 +152,26 @@ def format_realtime_table(json_data, titolo_sezione):
         with tab_p:
             if partenze:
                 df_p = pd.DataFrame(partenze)
-                df_p = process_dataframe(df_p)
-                # Ordinamento predefinito per partenze, dalle più recenti (discendente)
+                
+                # 1. Ordinamento eseguito SUI DATI ORIGINALI (dalle più recenti / discendente)
                 sort_cols = [c for c in df_p.columns if any(k in c.lower() for k in ['ora', 'data', 'time', 'date', 'sched', 'part'])]
                 if sort_cols:
                     df_p = df_p.sort_values(by=sort_cols[0], ascending=False)
                 else:
                     df_p = df_p.sort_values(by=df_p.columns[0], ascending=False)
+                
+                # 2. Formattazione delle date in modo leggibile DOPO il sort
+                df_p = process_dataframe(df_p)
                 st.dataframe(df_p, use_container_width=True)
             else:
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
-                    df = process_dataframe(df)
                     sort_cols = [c for c in df.columns if any(k in c.lower() for k in ['ora', 'data', 'time', 'date', 'sched', 'part'])]
                     if sort_cols:
                         df = df.sort_values(by=sort_cols[0], ascending=False)
                     else:
                         df = df.sort_values(by=df.columns[0], ascending=False)
+                    df = process_dataframe(df)
                     st.dataframe(df, use_container_width=True)
                 else:
                     st.write(json_data)
@@ -257,7 +260,6 @@ with tab_realtime:
         key="stazione_selezionata"
     )
 
-    # Definizione del frammento con aggiornamento automatico ogni 60 secondi
     @st.fragment(run_every=60)
     def render_realtime_board():
         st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
