@@ -1,6 +1,7 @@
 import re
 import random
 import logging
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -106,7 +107,7 @@ def estrai_news_ferrovia():
     return news
 
 # ==========================================
-# 2. FUNZIONE PER DATI REALTIME JSON
+# 2. FUNZIONE PER DATI REALTIME JSON & FORMATTAZIONE DATE
 # ==========================================
 @st.cache_data(ttl=30)
 def fetch_realtime_data(cod_sito):
@@ -118,6 +119,23 @@ def fetch_realtime_data(cod_sito):
     except Exception:
         pass
     return None
+
+def format_datetime_value(val):
+    """Converte stringhe nel formato YYYYMMDDHHMMSS in una data/ora leggibile."""
+    if isinstance(val, str) and val.isdigit() and len(val) == 14:
+        try:
+            dt = datetime.strptime(val, "%Y%m%d%H%M%S")
+            return dt.strftime("%d/%m/%Y %H:%M:%S")
+        except ValueError:
+            pass
+    return val
+
+def process_dataframe(df):
+    """Applica la formattazione leggibile a tutte le colonne del DataFrame."""
+    if df is not None and not df.empty:
+        for col in df.columns:
+            df[col] = df[col].apply(format_datetime_value)
+    return df
 
 def format_realtime_table(json_data, titolo_sezione):
     st.subheader(titolo_sezione)
@@ -134,10 +152,12 @@ def format_realtime_table(json_data, titolo_sezione):
         with tab_p:
             if partenze:
                 df_p = pd.DataFrame(partenze)
+                df_p = process_dataframe(df_p)
                 st.dataframe(df_p, use_container_width=True)
             else:
                 if isinstance(json_data, list):
                     df = pd.DataFrame(json_data)
+                    df = process_dataframe(df)
                     st.dataframe(df, use_container_width=True)
                 else:
                     st.write(json_data)
@@ -145,6 +165,7 @@ def format_realtime_table(json_data, titolo_sezione):
         with tab_a:
             if arrivi:
                 df_a = pd.DataFrame(arrivi)
+                df_a = process_dataframe(df_a)
                 st.dataframe(df_a, use_container_width=True)
             else:
                 st.info("Nessun dato sugli arrivi disponibile.")
@@ -209,9 +230,8 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: REALTIME TRENI (API JSON CON AUTO-REFRESH) ---
+# --- TAB 2: REALTIME TRENI (API JSON CON AUTO-REFRESH & DATE FORMATTATE) ---
 with tab_realtime:
-    # Script JavaScript per ricaricare la pagina automaticamente ogni 60 secondi (60000 ms)
     auto_refresh_script = """
     <script>
         setTimeout(function(){
