@@ -243,7 +243,7 @@ def format_realtime_table(json_data, titolo_sezione):
 st.title("📌 Dashboard")
 
 tab_ferrovia, tab_realtime, tab_tracking, tab_alimentare = st.tabs(
-    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "📦 Tracking Pacchi", "🥗 Avvisi Alimentari"]
+    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi"]
 )
 
 # --- TAB 1: FERROTRAMVIARIA ---
