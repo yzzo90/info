@@ -106,7 +106,58 @@ def estrai_news_ferrovia():
     return news
 
 # ==========================================
-# 2. INTERFACCIA STREAMLIT
+# 2. FUNZIONE PER DATI REALTIME JSON
+# ==========================================
+@st.cache_data(ttl=60)
+def fetch_realtime_data(cod_sito):
+    url = f"https://eticket.ferrovienordbarese.it/b2c/json/realtime/dati?codSito={cod_sito}&type=T"
+    try:
+        resp = requests.get(url, headers={"User-Agent": random.choice(USER_AGENTS)}, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception:
+        pass
+    return None
+
+def format_realtime_table(json_data, titolo_sezione):
+    st.subheader(titolo_sezione)
+    if not json_data:
+        st.info("Nessun dato disponibile o errore di connessione al server.")
+        return
+
+    # Gestione in base alla struttura del JSON restituito dall'endpoint
+    # Di solito contiene liste per partenze e/o arrivi
+    try:
+        # Esempio generico di parsing se i dati sono dizionari/liste
+        partenze = json_data.get("partenze", json_data.get("prospettoPartenze", []))
+        arrivi = json_data.get("arrivi", json_data.get("prospettoArrivi", []))
+
+        tab_p, tab_a = st.tabs(["Partenze", "Arrivi"])
+
+        with tab_p:
+            if partenze:
+                df_p = pd.DataFrame(partenze)
+                st.dataframe(df_p, use_container_width=True)
+            else:
+                # Se la struttura è diversa, proviamo a mostrare il JSON grezzo formattato o la lista diretta
+                if isinstance(json_data, list):
+                    df = pd.DataFrame(json_data)
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.write(json_data)
+
+        with tab_a:
+            if arrivi:
+                df_a = pd.DataFrame(arrivi)
+                st.dataframe(df_a, use_container_width=True)
+            else:
+                st.info("Nessun dato sugli arrivi disponibile.")
+    except Exception as e:
+        st.warning(f"Impossibile formattare i dati tabulari automaticamente. Ecco i dati grezzi:")
+        st.json(json_data)
+
+# ==========================================
+# 3. INTERFACCIA STREAMLIT
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
@@ -162,29 +213,27 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: REALTIME TRENI ---
+# --- TAB 2: REALTIME TRENI (API JSON) ---
 with tab_realtime:
-    st.subheader("🕒 Tabellone Realtime Treni")
+    col_rt_head, col_rt_btn = st.columns([4, 1])
+    with col_rt_btn:
+        if st.button("🔄 Aggiorna Treni", use_container_width=True):
+            fetch_realtime_data.clear()
+            st.rerun()
+
+    st.markdown("### Tabellone in Tempo Reale")
     
-    # Utilizziamo un iframe inglobato in un blocco HTML che forza l'esecuzione di showRealTime() 
-    # non appena l'iframe ha caricato la pagina interna.
-    realtime_html = """
-    <iframe id="realtimeFrame" src="https://eticket.ferrovienordbarese.it/b2c/web/index.jsp" width="100%" height="800px" style="border:none;"></iframe>
-    <script>
-        const iframe = document.getElementById('realtimeFrame');
-        iframe.onload = function() {
-            try {
-                // Tenta di attivare la funzione di tempo reale direttamente se accessibile via DOM interno
-                if (iframe.contentWindow && typeof iframe.contentWindow.showRealTime === 'function') {
-                    iframe.contentWindow.showRealTime();
-                }
-            } catch (e) {
-                console.log("Accesso cross-domain limitato, impossibile forzare lo script direttamente.");
-            }
-        };
-    </script>
-    """
-    components.html(realtime_html, height=820, scrolling=True)
+    stazione_scelta = st.selectbox(
+        "Seleziona Stazione", 
+        options=["Stazione Europa (S01136)", "Stazione Ruvo (S01160)"]
+    )
+
+    if "Europa" in stazione_scelta:
+        data_json = fetch_realtime_data("S01136")
+        format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Europa")
+    else:
+        data_json = fetch_realtime_data("S01160")
+        format_realtime_table(data_json, "Treni in Tempo Reale - Stazione Ruvo")
 
 # --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
 with tab_alimentare:
