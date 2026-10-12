@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 # 0. CONFIGURAZIONE PAGINA & LOGGING
 # ==========================================
 st.set_page_config(
-    page_title="Dashboard Avvisi & News", 
+    page_title="Dashboard", 
     page_icon="📢", 
     layout="wide"
 )
@@ -240,7 +240,7 @@ def format_realtime_table(json_data, titolo_sezione):
 # ==========================================
 # 3. INTERFACCIA STREAMLIT
 # ==========================================
-st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
+st.title("📌 Dashboard")
 
 tab_ferrovia, tab_realtime, tab_alimentare, tab_tracking = st.tabs(
     ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi"]
@@ -367,7 +367,7 @@ with tab_alimentare:
 # --- TAB 4: TRACKING PACCHI (LOCALSTORAGE PERSISTENTE) ---
 with tab_tracking:
     st.subheader("📦 Gestione Tracking Spedizioni (Persistente in Locale)")
-    st.markdown("I dati inseriti qui vengono salvati direttamente nel **`localStorage` del tuo browser**: resistono ai refresh e alla chiusura della pagina, rimanendo perfettamente privati sul tuo dispositivo.")
+    #st.markdown("I dati inseriti qui vengono salvati direttamente nel **`localStorage` del tuo browser**: resistono ai refresh e alla chiusura della pagina, rimanendo perfettamente privati sul tuo dispositivo.")
 
     tracking_html = """
     <div style="font-family: sans-serif; color: #white; padding: 5px;">
