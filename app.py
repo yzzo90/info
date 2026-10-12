@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 # 0. CONFIGURAZIONE PAGINA & LOGGING
 # ==========================================
 st.set_page_config(
-    page_title="Dashboard Avvisi & News", 
+    page_title="Dashboard", 
     page_icon="📢", 
     layout="wide"
 )
