@@ -40,16 +40,13 @@ def fetch_url(url):
 URL_AVVISI = "https://www.ferrotramviaria.it/web/guest/avvisi"
 URL_NEWS = "https://www.ferrotramviaria.it/web/guest/news"
 
-# Parole chiave da monitorare per il popover / allerte
 KEYWORDS_SCIOPERO = ["sciopero", "agitazione sindacale", "agitazioni sindacali", "astensione dal lavoro"]
 
 def contiene_parole_chiave(testo, parole_chiave):
-    """Verifica se una stringa contiene una qualsiasi delle parole chiave indicate."""
     testo_lower = testo.lower()
     return any(k.lower() in testo_lower for k in parole_chiave)
 
 def evidenzia_parole_chiave(testo, parole_chiave):
-    """Evidenzia in rosso le parole chiave all'interno del testo HTML."""
     pattern = r"(" + "|".join([re.escape(k) for k in parole_chiave]) + r")"
     return re.sub(pattern, r'<span style="color:red; font-weight:bold;">\1</span>', testo, flags=re.IGNORECASE)
 
@@ -119,7 +116,6 @@ tab_ferrovia, tab_realtime, tab_alimentare = st.tabs(
 
 # --- TAB 1: FERROTRAMVIARIA ---
 with tab_ferrovia:
-    # Pulsante di aggiornamento manuale dati Ferrotramviaria
     col_head, col_refresh_ft = st.columns([4, 1])
     with col_refresh_ft:
         if st.button("🚆 Aggiorna", use_container_width=True):
@@ -130,12 +126,10 @@ with tab_ferrovia:
     avvisi_ft = estrai_avvisi_ferrovia()
     news_ft = estrai_news_ferrovia()
 
-    # Raccoglie tutti gli elementi relativi a scioperi o allerte
     elementi_sciopero = [
         item for item in avvisi_ft + news_ft if item.get("is_sciopero")
     ]
 
-    # SE PRESENTE UN AVVISO DI SCIOPERO / ALLERTA: Mostra Popover e Toast
     if elementi_sciopero:
         st.toast("⚠️ Trovati avvisi o news di particolare rilevanza!", icon="⚠️")
         
@@ -171,11 +165,26 @@ with tab_ferrovia:
 # --- TAB 2: REALTIME TRENI ---
 with tab_realtime:
     st.subheader("🕒 Tabellone Realtime Treni")
-    components.iframe(
-        "https://eticket.ferrovienordbarese.it/b2c/web/index.jsp#RT", 
-        height=800, 
-        scrolling=True
-    )
+    
+    # Utilizziamo un iframe inglobato in un blocco HTML che forza l'esecuzione di showRealTime() 
+    # non appena l'iframe ha caricato la pagina interna.
+    realtime_html = """
+    <iframe id="realtimeFrame" src="https://eticket.ferrovienordbarese.it/b2c/web/index.jsp" width="100%" height="800px" style="border:none;"></iframe>
+    <script>
+        const iframe = document.getElementById('realtimeFrame');
+        iframe.onload = function() {
+            try {
+                // Tenta di attivare la funzione di tempo reale direttamente se accessibile via DOM interno
+                if (iframe.contentWindow && typeof iframe.contentWindow.showRealTime === 'function') {
+                    iframe.contentWindow.showRealTime();
+                }
+            } catch (e) {
+                console.log("Accesso cross-domain limitato, impossibile forzare lo script direttamente.");
+            }
+        };
+    </script>
+    """
+    components.html(realtime_html, height=820, scrolling=True)
 
 # --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
 with tab_alimentare:
