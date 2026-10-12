@@ -131,10 +131,26 @@ def format_datetime_value(val):
     return val
 
 def process_dataframe(df):
-    """Applica la formattazione leggibile a tutte le colonne del DataFrame."""
+    """Applica la formattazione leggibile e pulisce i ritardi."""
     if df is not None and not df.empty:
         for col in df.columns:
+            # Formattazione date/ore a 14 cifre
             df[col] = df[col].apply(format_datetime_value)
+            
+            # Pulizia specifica per la colonna ritardo
+            if 'ritardo' in col.lower():
+                def clean_delay(val):
+                    if val is None or str(val).lower() == 'none' or pd.isna(val):
+                        return "0 min"
+                    try:
+                        num = float(val)
+                        if num == 0:
+                            return "In orario"
+                        else:
+                            return f"+{int(num)} min"
+                    except ValueError:
+                        return val
+                df[col] = df[col].apply(clean_delay)
     return df
 
 def reorder_columns(df):
@@ -197,7 +213,6 @@ def format_realtime_table(json_data, titolo_sezione):
                 df_p = process_dataframe(df_p)
                 df_p = reorder_columns(df_p)
                 
-                # Applicazione dello stile rosso per i treni soppressi
                 styled_df_p = df_p.style.apply(highlight_soppressa, axis=1)
                 st.dataframe(styled_df_p, use_container_width=True)
             else:
