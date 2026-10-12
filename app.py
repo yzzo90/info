@@ -113,8 +113,8 @@ def estrai_news_ferrovia():
 # ==========================================
 st.title("📌 Dashboard Avvisi Ferrotramviaria & Sicurezza Alimentare")
 
-tab_ferrovia, tab_alimentare = st.tabs(
-    ["🚆 Ferrotramviaria", "🥗 Avvisi Alimentari"]
+tab_ferrovia, tab_realtime, tab_alimentare = st.tabs(
+    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari"]
 )
 
 # --- TAB 1: FERROTRAMVIARIA ---
@@ -168,7 +168,16 @@ with tab_ferrovia:
         else:
             st.info("Nessuna news disponibile al momento.")
 
-# --- TAB 2: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
+# --- TAB 2: REALTIME TRENI ---
+with tab_realtime:
+    st.subheader("🕒 Tabellone Realtime Treni")
+    components.iframe(
+        "https://eticket.ferrovienordbarese.it/b2c/web/index.jsp", 
+        height=800, 
+        scrolling=True
+    )
+
+# --- TAB 3: RICHIAMI ALIMENTARI (WEB APP KOYEB) ---
 with tab_alimentare:
     app_url = "https://wrong-aurie-alimenti190-497b0369.koyeb.app/"
     
