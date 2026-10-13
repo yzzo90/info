@@ -126,7 +126,7 @@ def format_datetime_value(val):
     if isinstance(val, str) and val.isdigit() and len(val) == 14:
         try:
             dt = datetime.strptime(val, "%Y%m%d%H%M%S")
-            return dt.strftime("%d/%m/%Y %H:%M:%S")
+            return dt.strftime("%H:%M:%S")  # Modificato per mostrare solo l'ora
         except ValueError:
             pass
     return val
