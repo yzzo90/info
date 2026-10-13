@@ -126,7 +126,7 @@ def format_datetime_value(val):
     if isinstance(val, str) and val.isdigit() and len(val) == 14:
         try:
             dt = datetime.strptime(val, "%Y%m%d%H%M%S")
-            return dt.strftime("%H:%M:%S")  # Modificato per mostrare solo l'ora
+            return dt.strftime("%H:%M:%S")
         except ValueError:
             pass
     return val
@@ -151,32 +151,6 @@ def process_dataframe(df):
                 df[col] = df[col].apply(clean_delay)
     return df
 
-def reorder_columns(df):
-    if df is None or df.empty:
-        return df
-    
-    cols_lower = {c.lower(): c for c in df.columns}
-    initial_targets = ['nomedestinazione', 'partenza', 'ritardo', 'soppressa']
-    ordered = []
-    
-    for t in initial_targets:
-        if t in cols_lower:
-            ordered.append(cols_lower[t])
-            
-    binario_col = next((cols_lower[c] for c in cols_lower if 'binario' in c and 'effettivo' in c), None)
-    numero_col = next((cols_lower[c] for c in cols_lower if c == 'numero'), None)
-    
-    remaining = [c for c in df.columns if c not in ordered and c != binario_col]
-    
-    if binario_col and numero_col and numero_col in remaining:
-        num_idx = remaining.index(numero_col)
-        remaining.insert(num_idx, binario_col)
-    elif binario_col:
-        remaining.append(binario_col)
-        
-    final_cols = ordered + [c for c in remaining if c not in ordered]
-    return df[[c for c in final_cols if c in df.columns]]
-
 def highlight_soppressa(row):
     cols_lower = [c.lower() for c in row.index]
     if 'soppressa' in cols_lower:
@@ -197,44 +171,52 @@ def format_realtime_table(json_data, titolo_sezione):
 
         tab_p, tab_a = st.tabs(["Partenze", "Arrivi"])
 
-        with tab_p:
-            if partenze:
-                df_p = pd.DataFrame(partenze)
-                col_partenza = next((c for c in df_p.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df_p.columns[0])
-                
-                df_p['_sort_dt'] = pd.to_datetime(df_p[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                df_p = df_p.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
-                
-                df_p = process_dataframe(df_p)
-                df_p = reorder_columns(df_p)
-                
-                styled_df_p = df_p.style.apply(highlight_soppressa, axis=1)
-                st.dataframe(styled_df_p, use_container_width=True)
+        def clean_and_display_df(raw_data, type_str):
+            if not raw_data:
+                st.info(f"Nessun dato sugli {type_str.lower()} disponibile.")
+                return
+            
+            df = pd.DataFrame(raw_data)
+            time_key = 'partenza' if type_str == 'Partenze' else 'arrivo'
+            col_time = next((c for c in df.columns if time_key in c.lower() or 'ora' in c.lower()), df.columns[0])
+            
+            df['_sort_dt'] = pd.to_datetime(df[col_time].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
+            df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
+            
+            df = process_dataframe(df)
+            
+            # Mappatura e selezione colonne essenziali per la massima compattezza su smartphone
+            cols_lower = {c.lower(): c for c in df.columns}
+            selected_mapping = {}
+            
+            for c_low, c_orig in cols_lower.items():
+                if 'destinazione' in c_low or 'nomedestinazione' in c_low:
+                    selected_mapping[c_orig] = 'Destinazione'
+                elif time_key in c_low:
+                    selected_mapping[c_orig] = 'Orario'
+                elif 'ritardo' in c_low:
+                    selected_mapping[c_orig] = 'Ritardo'
+                elif 'binario' in c_low:
+                    selected_mapping[c_orig] = 'Binario'
+                elif 'soppressa' in c_low:
+                    selected_mapping[c_orig] = 'Soppressa'
+                elif c_low == 'numero':
+                    selected_mapping[c_orig] = 'Treno'
+
+            if selected_mapping:
+                df_compact = df[list(selected_mapping.keys())].rename(columns=selected_mapping)
             else:
-                if isinstance(json_data, list):
-                    df = pd.DataFrame(json_data)
-                    col_partenza = next((c for c in df.columns if any(k in c.lower() for k in ['partenza', 'ora', 'data', 'time', 'sched'])), df.columns[0])
-                    df['_sort_dt'] = pd.to_datetime(df[col_partenza].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                    df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
-                    df = process_dataframe(df)
-                    df = reorder_columns(df)
-                    styled_df = df.style.apply(highlight_soppressa, axis=1)
-                    st.dataframe(styled_df, use_container_width=True)
-                else:
-                    st.write(json_data)
+                df_compact = df
+
+            styled_df = df_compact.style.apply(highlight_soppressa, axis=1)
+            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+        with tab_p:
+            clean_and_display_df(partenze, "Partenze")
 
         with tab_a:
-            if arrivi:
-                df_a = pd.DataFrame(arrivi)
-                col_arrivo = next((c for c in df_a.columns if any(k in c.lower() for k in ['arrivo', 'ora', 'data', 'time', 'sched'])), df_a.columns[0])
-                df_a['_sort_dt'] = pd.to_datetime(df_a[col_arrivo].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
-                df_a = df_a.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
-                df_a = process_dataframe(df_a)
-                df_a = reorder_columns(df_a)
-                styled_df_a = df_a.style.apply(highlight_soppressa, axis=1)
-                st.dataframe(styled_df_a, use_container_width=True)
-            else:
-                st.info("Nessun dato sugli arrivi disponibile.")
+            clean_and_display_df(arrivi, "Arrivi")
+
     except Exception as e:
         st.warning("Impossibile formattare i dati tabulari automaticamente. Ecco i dati grezzi:")
         st.json(json_data)
@@ -315,7 +297,6 @@ with tab_realtime:
 
     @st.fragment(run_every=60)
     def render_realtime_board():
-        #st.caption(f"Ultimo aggiornamento automatico: {datetime.now().strftime('%H:%M:%S')}")
         ora_italiana = datetime.now(ZoneInfo("Europe/Rome")).strftime("%H:%M:%S")
         st.caption(f"Ultimo aggiornamento automatico: {ora_italiana}")
         
@@ -371,7 +352,6 @@ with tab_alimentare:
 # --- TAB 4: TRACKING PACCHI (LOCALSTORAGE PERSISTENTE) ---
 with tab_tracking:
     st.subheader("📦 Gestione Tracking Spedizioni (Persistente in Locale)")
-    #st.markdown("I dati inseriti qui vengono salvati direttamente nel **`localStorage` del tuo browser**: resistono ai refresh e alla chiusura della pagina, rimanendo perfettamente privati sul tuo dispositivo.")
 
     tracking_html = """
     <div style="font-family: sans-serif; color: #white; padding: 5px;">
