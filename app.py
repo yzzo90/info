@@ -176,6 +176,7 @@ def format_realtime_table(json_data, titolo_sezione):
             df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
             df = process_dataframe(df)
             
+            cards_html = ""
             for _, row in df.iterrows():
                 dest = "-"
                 orario = "-"
@@ -201,24 +202,36 @@ def format_realtime_table(json_data, titolo_sezione):
                         treno = val
 
                 is_suppr = soppressa and soppressa.strip().upper() not in ['N', 'FALSE', 'NAN', 'NONE', '']
-                card_bg = "#1e1e1e"
-                border_color = "#ff4b4b" if is_suppr else "#333"
                 
-                card_html = f"""
-                <div style="background-color: {card_bg}; border: 1px solid {border_color}; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; font-family: sans-serif; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
-                    <div style="font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-                        <span>🚆 Treno {treno} &rarr; {dest}</span>
-                        {"<span style='color: #ffffff; background: #ff4b4b; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;'>SOPPRESSO</span>" if is_suppr else ""}
+                bg_color = "#18191c"
+                border_color = "#ff4b4b" if is_suppr else "#2d2f36"
+                delay_color = "#ff4b4b" if ("+" in ritardo or ("min" in ritardo and "0 min" not in ritardo)) else "#4ade80"
+                soppressa_badge = (
+                    '<span style="background-color: #ff4b4b; color: #ffffff; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 11px;">SOPPRESSO</span>'
+                    if is_suppr else
+                    '<span style="color: #888888; font-size: 13px;">Regolare</span>'
+                )
+
+                cards_html += f"""
+                <div style="background-color: {bg_color}; border: 1px solid {border_color}; border-radius: 8px; padding: 14px 18px; margin-bottom: 10px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 6px;">
+                        <div style="font-size: 17px; font-weight: bold; color: #ffffff;">
+                            🏷️ {dest} <span style="font-size: 13px; color: #888888; font-weight: normal;">(Treno {treno})</span>
+                        </div>
+                        <div>
+                            {soppressa_badge}
+                        </div>
                     </div>
-                    <div style="display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #aaa;">
-                        <div>Orario: <b style="color: #ffffff;">{orario}</b></div>
-                        <div>Binario: <b style="color: #ffffff;">{binario}</b></div>
-                        <div>Ritardo: <b style="color: {"#ff4b4b" if ritardo != "In orario" and ritardo != "0 min" else "#4ade80"};">{ritardo}</b></div>
-                        <div>Soppressa: <b style="color: {"#ff4b4b" if is_suppr else "#ffffff"};">{soppressa}</b></div>
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 13px; color: #a0a0a0; border-top: 1px solid #28292e; padding-top: 8px;">
+                        <div>🕒 Orario: <b style="color: #ffffff; font-size: 14px;">{orario}</b></div>
+                        <div>⏱️ Ritardo: <b style="color: {delay_color}; font-size: 14px;">{ritardo}</b></div>
+                        <div>🚉 Binario: <b style="color: #ffffff; font-size: 14px;">{binario}</b></div>
+                        <div>🚫 Soppressa: <b style="color: {"#ff4b4b" if is_suppr else "#ffffff"}; font-size: 14px;">{soppressa}</b></div>
                     </div>
                 </div>
                 """
-                st.markdown(card_html, unsafe_allow_html=True)
+            
+            st.markdown(cards_html, unsafe_allow_html=True)
 
         with tab_p:
             render_cards(partenze, "Partenze")
