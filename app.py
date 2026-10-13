@@ -151,14 +151,6 @@ def process_dataframe(df):
                 df[col] = df[col].apply(clean_delay)
     return df
 
-def highlight_soppressa(row):
-    cols_lower = [c.lower() for c in row.index]
-    if 'soppressa' in cols_lower:
-        val = str(row.iloc[cols_lower.index('soppressa')]).strip().upper()
-        if val and val != 'N' and val != 'FALSE':
-            return ['background-color: rgba(255, 0, 0, 0.3)'] * len(row)
-    return [''] * len(row)
-
 def format_realtime_table(json_data, titolo_sezione):
     st.subheader(titolo_sezione)
     if not json_data:
@@ -171,7 +163,7 @@ def format_realtime_table(json_data, titolo_sezione):
 
         tab_p, tab_a = st.tabs(["Partenze", "Arrivi"])
 
-        def clean_and_display_df(raw_data, type_str):
+        def render_cards(raw_data, type_str):
             if not raw_data:
                 st.info(f"Nessun dato sugli {type_str.lower()} disponibile.")
                 return
@@ -182,43 +174,60 @@ def format_realtime_table(json_data, titolo_sezione):
             
             df['_sort_dt'] = pd.to_datetime(df[col_time].astype(str), format='%Y%m%d%H%M%S', errors='coerce')
             df = df.sort_values(by='_sort_dt', ascending=True).drop(columns=['_sort_dt'])
-            
             df = process_dataframe(df)
             
-            # Mappatura e selezione colonne essenziali per la massima compattezza su smartphone
-            cols_lower = {c.lower(): c for c in df.columns}
-            selected_mapping = {}
-            
-            for c_low, c_orig in cols_lower.items():
-                if 'destinazione' in c_low or 'nomedestinazione' in c_low:
-                    selected_mapping[c_orig] = 'Destinazione'
-                elif time_key in c_low:
-                    selected_mapping[c_orig] = 'Orario'
-                elif 'ritardo' in c_low:
-                    selected_mapping[c_orig] = 'Ritardo'
-                elif 'binario' in c_low:
-                    selected_mapping[c_orig] = 'Binario'
-                elif 'soppressa' in c_low:
-                    selected_mapping[c_orig] = 'Soppressa'
-                elif c_low == 'numero':
-                    selected_mapping[c_orig] = 'Treno'
+            for _, row in df.iterrows():
+                dest = "-"
+                orario = "-"
+                ritardo = "In orario"
+                soppressa = "N"
+                binario = "-"
+                treno = "-"
+                
+                for col in df.columns:
+                    c_low = col.lower()
+                    val = str(row[col])
+                    if 'destinazione' in c_low or 'nomedestinazione' in c_low:
+                        dest = val
+                    elif time_key in c_low:
+                        orario = val
+                    elif 'ritardo' in c_low:
+                        ritardo = val
+                    elif 'soppressa' in c_low:
+                        soppressa = val
+                    elif 'binario' in c_low:
+                        binario = val
+                    elif c_low == 'numero':
+                        treno = val
 
-            if selected_mapping:
-                df_compact = df[list(selected_mapping.keys())].rename(columns=selected_mapping)
-            else:
-                df_compact = df
-
-            styled_df = df_compact.style.apply(highlight_soppressa, axis=1)
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                is_suppr = soppressa and soppressa.strip().upper() not in ['N', 'FALSE', 'NAN', 'NONE', '']
+                card_bg = "#1e1e1e"
+                border_color = "#ff4b4b" if is_suppr else "#333"
+                
+                card_html = f"""
+                <div style="background-color: {card_bg}; border: 1px solid {border_color}; border-radius: 8px; padding: 14px 18px; margin-bottom: 12px; font-family: sans-serif; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                    <div style="font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                        <span>🚆 Treno {treno} &rarr; {dest}</span>
+                        {"<span style='color: #ffffff; background: #ff4b4b; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;'>SOPPRESSO</span>" if is_suppr else ""}
+                    </div>
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: #aaa;">
+                        <div>Orario: <b style="color: #ffffff;">{orario}</b></div>
+                        <div>Binario: <b style="color: #ffffff;">{binario}</b></div>
+                        <div>Ritardo: <b style="color: {"#ff4b4b" if ritardo != "In orario" and ritardo != "0 min" else "#4ade80"};">{ritardo}</b></div>
+                        <div>Soppressa: <b style="color: {"#ff4b4b" if is_suppr else "#ffffff"};">{soppressa}</b></div>
+                    </div>
+                </div>
+                """
+                st.markdown(card_html, unsafe_allow_html=True)
 
         with tab_p:
-            clean_and_display_df(partenze, "Partenze")
+            render_cards(partenze, "Partenze")
 
         with tab_a:
-            clean_and_display_df(arrivi, "Arrivi")
+            render_cards(arrivi, "Arrivi")
 
     except Exception as e:
-        st.warning("Impossibile formattare i dati tabulari automaticamente. Ecco i dati grezzi:")
+        st.warning("Impossibile formattare i dati in stile elenco. Ecco i dati grezzi:")
         st.json(json_data)
 
 # ==========================================
