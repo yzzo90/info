@@ -529,7 +529,7 @@ with tab_concorsi:
             carica_tutti_concorsi.clear()
             st.rerun()
 
-    st.subheader("🏛️ Concorsi inPA (Lazio & Nazionali - Ultimi 8 giorni)")
+    st.subheader("🏛️ Concorsi inPA (Ultimi 8 giorni)")
 
     concorsi_list = carica_tutti_concorsi()
 
