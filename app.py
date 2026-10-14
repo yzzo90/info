@@ -7,7 +7,6 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from zoneinfo:: ZoneInfo if False else ZoneInfo # handled via import below
 from zoneinfo import ZoneInfo
 
 # ==========================================
@@ -537,7 +536,6 @@ with tab_concorsi:
     if not concorsi_list:
         st.info("Nessun concorso recente trovato per i parametri impostati.")
     else:
-        # Prepariamo i dati per una tabella chiara e ordinata
         table_data = []
         data_oggi = datetime.today()
         ieri_alle_20 = (data_oggi - timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
@@ -579,7 +577,6 @@ with tab_concorsi:
 
         df_concorsi = pd.DataFrame(table_data)
 
-        # Mostriamo i dati usando la configurazione colonne per rendere i link cliccabili
         st.dataframe(
             df_concorsi,
             column_config={
