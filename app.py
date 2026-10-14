@@ -1,13 +1,13 @@
 import re
 import random
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
-from datetime import datetime
+from zoneinfo:: ZoneInfo if False else ZoneInfo # handled via import below
 from zoneinfo import ZoneInfo
 
 # ==========================================
@@ -244,12 +244,91 @@ def format_realtime_table(json_data, titolo_sezione):
         st.json(json_data)
 
 # ==========================================
-# 3. INTERFACCIA STREAMLIT
+# 3. LOGICA CONCORSI inPA
+# ==========================================
+API_INPA_URL = "https://portale.inpa.gov.it/concorsi-smart/api/concorso-public-area/search-better"
+INPA_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "Mozilla/5.0",
+}
+
+PAYLOAD_REGIONE = {
+    "text": "",
+    "status": ["OPEN"],
+    "dateFrom": None,
+    "dateTo": None,
+    "concorsiIdExcluded": None,
+    "excludeReindirizzamento": None,
+    "categoriaId": "8d70df1b4bca4904b3a4",
+    "regioneId": "13",
+    "tipiProcedure": None
+}
+
+PAYLOAD_NAZIONALE = {
+    "text": "",
+    "status": ["OPEN"],
+    "dateFrom": None,
+    "dateTo": None,
+    "concorsiIdExcluded": None,
+    "excludeReindirizzamento": None,
+    "categoriaId": "8d70df1b4bca4904b3a4",
+    "regioneId": None,
+    "tipiProcedure": None
+}
+
+def get_concorsi_api(payload):
+    try:
+        response = requests.post(API_INPA_URL, json=payload, headers=INPA_HEADERS, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return {}
+
+def estrai_concorsi_validi(results, include_nazionali=False):
+    if 'content' not in results:
+        return []
+    content = results['content']
+    if not content:
+        return []
+
+    data_oggi = datetime.today().date()
+    ultimi_8_giorni = [data_oggi - timedelta(days=i) for i in range(8)]
+
+    concorsi_filtrati = []
+    for concorso in content:
+        try:
+            data_pub = datetime.strptime(concorso.get('dataPubblicazione').split('T')[0], "%Y-%m-%d").date()
+        except Exception:
+            continue
+
+        if data_pub in ultimi_8_giorni:
+            sedi = concorso.get('sedi', '')
+            if include_nazionali and "Nazionale" not in str(sedi):
+                continue
+            concorsi_filtrati.append(concorso)
+
+    return concorsi_filtrati
+
+@st.cache_data(ttl=1800)
+def carica_tutti_concorsi():
+    risultati_regione = get_concorsi_api(PAYLOAD_REGIONE)
+    concorsi_regione = estrai_concorsi_validi(risultati_regione)
+
+    risultati_nazionali = get_concorsi_api(PAYLOAD_NAZIONALE)
+    concorsi_nazionali = estrai_concorsi_validi(risultati_nazionali, include_nazionali=True)
+
+    tutti = {c['id']: c for c in concorsi_regione + concorsi_nazionali}.values()
+    return list(tutti)
+
+
+# ==========================================
+# 4. INTERFACCIA STREAMLIT
 # ==========================================
 st.title("📌 Dashboard")
 
-tab_ferrovia, tab_realtime, tab_alimentare, tab_tracking = st.tabs(
-    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi"]
+tab_ferrovia, tab_realtime, tab_alimentare, tab_tracking, tab_concorsi = st.tabs(
+    ["🚆 Ferrotramviaria", "🕒 Realtime Treni", "🥗 Avvisi Alimentari", "📦 Tracking Pacchi", "🏛️ Concorsi inPA"]
 )
 
 # --- TAB 1: FERROTRAMVIARIA ---
@@ -442,3 +521,70 @@ with tab_tracking:
     </script>
     """
     components.html(tracking_html, height=400, scrolling=True)
+
+# --- TAB 5: CONCORSI inPA ---
+with tab_concorsi:
+    col_c_head, col_c_btn = st.columns([4, 1])
+    with col_c_btn:
+        if st.button("🔄 Aggiorna Concorsi", use_container_width=True):
+            carica_tutti_concorsi.clear()
+            st.rerun()
+
+    st.subheader("🏛️ Concorsi inPA (Lazio & Nazionali - Ultimi 8 giorni)")
+
+    concorsi_list = carica_tutti_concorsi()
+
+    if not concorsi_list:
+        st.info("Nessun concorso recente trovato per i parametri impostati.")
+    else:
+        # Prepariamo i dati per una tabella chiara e ordinata
+        table_data = []
+        data_oggi = datetime.today()
+        ieri_alle_20 = (data_oggi - timedelta(days=1)).replace(hour=20, minute=0, second=0, microsecond=0)
+
+        for c in concorsi_list:
+            pubb_str = c.get('dataPubblicazione', '')
+            scad_str = c.get('dataScadenza', '')
+            
+            try:
+                pubb_dt = datetime.strptime(pubb_str, "%Y-%m-%dT%H:%M:%SZ")
+                data_form_pubb = pubb_dt.strftime("%d/%m/%Y %H:%M")
+                is_new = pubb_dt >= ieri_alle_20
+            except Exception:
+                data_form_pubb = pubb_str
+                is_new = False
+
+            try:
+                scad_dt = datetime.strptime(scad_str, "%Y-%m-%dT%H:%M:%SZ")
+                data_form_scadenza = scad_dt.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                data_form_scadenza = scad_str
+
+            sedi = c.get('sedi', 'N/A')
+            if "Nazionale" in str(sedi):
+                sedi = "Nazionale"
+
+            url_dettaglio = f"https://portale.inpa.gov.it/ui/public-area/concoursedetail/{c.get('id', '')}"
+            
+            table_data.append({
+                "Novità": "🔥 NEW" if is_new else "Normale",
+                "Figura Ricercata": c.get('figuraRicercata', 'N/A'),
+                "Titolo": c.get('titolo', 'N/A'),
+                "Sedi": sedi,
+                "Posti": c.get('numPosti', 'N/A'),
+                "Pubblicazione": data_form_pubb,
+                "Scadenza": data_form_scadenza,
+                "Link": url_dettaglio
+            })
+
+        df_concorsi = pd.DataFrame(table_data)
+
+        # Mostriamo i dati usando la configurazione colonne per rendere i link cliccabili
+        st.dataframe(
+            df_concorsi,
+            column_config={
+                "Link": st.column_config.LinkColumn("Link Concorso", display_text="Apri inPA ↗")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
